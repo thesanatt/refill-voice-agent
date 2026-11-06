@@ -152,10 +152,24 @@ Documented but not built: a patient calling back during an open SMS thread, seve
 - Why: it starts with no vendor dependency and runs in milliseconds locally. A silence timer scored far lower in the one comparison found, and dates of birth contain long pauses.
 - Revisit if: recordings of real speech show cut-offs this cannot fix, then move to B. Tune on human speech, since Smart Turn's false cut-off rate rose from 1.0% on real clips to 57.7% on synthetic ones in one benchmark.
 
+## D12. Detecting an early hang-up (2026-11-06)
+- Options: (A) WebRTC connection state alone; (B) the End button, a `pagehide` handler and a heartbeat; (C) a silence timeout.
+- Chosen: B. The End button and `pagehide` close the connection at once. An abnormal loss starts a 3 to 5 s grace timer, cancelled if the session reconnects. Silence never sends a text. One handler, under the session lock so it sees any write in progress, sends the text once and sends nothing if the request is complete.
+- Why: without `pagehide`, a closed tab took about 30 s to reach aiortc in a local test. With it, closing the real page marked the session dropped in about 55 ms. A 30-second gap would read as a bug in a demo.
+- Revisit if: real telephony is added, which reports hang-ups differently.
+
+## D13. Identity on SMS: trust a verified session (2026-11-06)
+- Options: (A) trust the phone number on file; (B) trust a session verified on the call; (C) ask for the date of birth at the start of every thread.
+- Chosen: B. A session verified by voice continues over SMS with no new check. If the call dropped before verification, the first text names no drug and asks for the full name and date of birth, and nothing unverified counts as collected.
+- Why: A treats a delivery address as identity, and C re-collects what the take-home says not to.
+- Revisit if: real SMS is added, when a session expiry and a step-up before changing pharmacy are needed.
+
+## D14. Interface: one page with call and SMS panes (2026-11-06)
+- Options: (A) one page; (B) separate views.
+- Chosen: A.
+- Why: a reviewer sees the hang-up and the text arrive without switching windows.
+- Revisit if: real telephony is added.
+
 ## Open questions
 
-Numbers are kept so earlier references stay valid. Q1, Q2, Q3, Q4, Q7, Q8, Q10 and Q11 are decided above as D8, D10, D1, D2, D3, D11, D4 and D9.
-
-- Q5. Detecting an early hang-up: socket close, an explicit end button, silence timeout. When exactly is the SMS sent?
-- Q6. The SMS channel: does it confirm identity again, or trust the phone number on file?
-- Q9. Interface: one page with call and SMS panes, or separate views.
+None at the moment. Earlier references use these numbers: Q1 is D8, Q2 is D10, Q3 is D1, Q4 is D2, Q5 is D12, Q6 is D13, Q7 is D3, Q8 is D11, Q9 is D14, Q10 is D4 and Q11 is D9.
