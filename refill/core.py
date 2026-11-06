@@ -10,14 +10,16 @@ from refill.render import (
     NO_PROGRESS_OUTCOMES,
     after_close_line,
     compose_reply,
+    first_text,
     greeting,
     load_facts,
     pending_question,
 )
-from refill.steps import FINISHED_STATUSES, Step, allowed_tools, next_step
+from refill.steps import FINISHED_STATUSES, Step, allowed_tools, identity_locked, next_step
 from refill.tools import definitions_for, mentions_refill_details, run_tool
 
 LAST_EXCHANGE_MESSAGES = 3
+NO_OPEN_REQUEST_TEXT = "I don't have an open request for this number. Please call us to start a refill."
 IDENTITY_FAILURE_LINES = ("I couldn't match that", "I'm not able to verify that")
 
 session_locks = defaultdict(asyncio.Lock)
@@ -53,9 +55,71 @@ def open_session(caller_phone, channel):
     return session_id, opening_line
 
 
-def drop_session(session_id):
+def send_text(conn, session_id, text):
+    add_message(conn, session_id, "sms", "agent", text)
+
+
+def finish_call(session_id):
+    """End a call however it ended. Safe to run twice, and sends at most one text."""
     with transaction() as conn:
         conn.execute("UPDATE sessions SET status = 'dropped' WHERE id = ? AND status = 'active'", (session_id,))
+        session = load_session(conn, session_id)
+        if session["status"] != "dropped":
+            return None
+        if identity_locked(session):
+            update_session(conn, session_id, needs_pharmacist=1)
+            return None
+        claimed = conn.execute(
+            "UPDATE sessions SET sms_sent_at = ?, channel = 'sms' WHERE id = ? AND sms_sent_at IS NULL",
+            (utc_now(), session_id),
+        ).rowcount
+        if not claimed:
+            return None
+        session = load_session(conn, session_id)
+        text = first_text(session, load_facts(conn, session))
+        if next_step(session) is Step.CONFIRM:
+            update_session(conn, session_id, price_stated_at=utc_now())
+        send_text(conn, session_id, text)
+        return text
+
+
+async def close_call(session_id):
+    async with session_locks[session_id]:
+        return await asyncio.to_thread(finish_call, session_id)
+
+
+def latest_text_session(phone):
+    with transaction() as conn:
+        row = conn.execute(
+            """
+            SELECT id FROM sessions WHERE caller_phone = ? AND sms_sent_at IS NOT NULL
+            ORDER BY sms_sent_at DESC LIMIT 1
+            """,
+            (phone,),
+        ).fetchone()
+    return row["id"] if row else None
+
+
+def text_thread(phone, after_id):
+    session_id = latest_text_session(phone)
+    if session_id is None:
+        return []
+    with transaction() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, role, text FROM messages
+            WHERE session_id = ? AND channel = 'sms' AND id > ? ORDER BY id
+            """,
+            (session_id, after_id),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+async def receive_text(phone, text):
+    session_id = await asyncio.to_thread(latest_text_session, phone)
+    if session_id is None:
+        return Reply(NO_OPEN_REQUEST_TEXT, ends_conversation=True)
+    return await handle_turn(session_id, text)
 
 
 def mark_reply_unheard(session_id):
@@ -128,6 +192,7 @@ def load_turn(conn, session, text=None, just_verified=False):
 
 def begin_turn(session_id, text):
     with transaction() as conn:
+        conn.execute("UPDATE sessions SET status = 'active' WHERE id = ? AND status = 'dropped'", (session_id,))
         session = load_session(conn, session_id)
         add_message(conn, session_id, session["channel"], "patient", text)
         if session["status"] in FINISHED_STATUSES:

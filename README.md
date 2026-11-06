@@ -2,7 +2,7 @@
 
 A voice agent that takes prescription refill requests over a (simulated) phone call and continues over (simulated) SMS if the call drops. The problem statement is in [docs/TAKE_HOME.md](docs/TAKE_HOME.md), kickoff clarifications in [docs/KICKOFF_NOTES.md](docs/KICKOFF_NOTES.md), and design decisions in [docs/DECISIONS.md](docs/DECISIONS.md).
 
-Status: the text loop and the voice call both work, tuned on real calls. The SMS fallback is next.
+Status: the core flow works by voice and over the simulated SMS fallback, tuned on real calls.
 
 ## Setup
 
@@ -34,6 +34,8 @@ Open http://127.0.0.1:7860 in Chrome, allow the microphone and press Start call.
 
 During a call, the page shows two keys, which also work from a computer keyboard: `*` goes back one answer and `#` returns to the main menu.
 
+If a call ends before the request is complete, a text appears in the pane beside the call and the conversation continues there from the step where it stopped.
+
 Each call is saved to `recordings/<session id>.wav`, which git ignores. The patient is on the left channel and the agent on the right.
 
 ## Run the text loop
@@ -51,6 +53,7 @@ The database is `refill.db`, created and seeded on first run. Delete it to start
 
 ```bash
 uv run python -m tests.exit_checks
+uv run python -m tests.sms_fallback --runs 3
 uv run python -m tests.run_scenarios --set tuned --runs 3
 uv run python -m tests.run_scenarios --set holdout --runs 3
 ```

@@ -161,8 +161,8 @@ Documented but not built: a patient calling back during an open SMS thread, seve
 
 ## D12. Detecting an early hang-up (2026-11-06)
 - Options: (A) WebRTC connection state alone; (B) the End button, a `pagehide` handler and a heartbeat; (C) a silence timeout.
-- Chosen: B. The End button and `pagehide` close the connection at once. An abnormal loss starts a 3 to 5 s grace timer, cancelled if the session reconnects. Silence never sends a text. One handler, under the session lock so it sees any write in progress, sends the text once and sends nothing if the request is complete.
-- Why: without `pagehide`, a closed tab took about 30 s to reach aiortc in a local test. With it, closing the real page marked the session dropped in about 55 ms. A 30-second gap would read as a bug in a demo.
+- Chosen: B. The End button and `pagehide` close the connection at once. The page sends a heartbeat every second, and 4 s without one counts as a lost connection. Silence never sends a text. One handler, `finish_call`, runs under the session lock so it sees any write in progress, sends the text once and sends nothing if the request is complete or identity failed. There is no reconnect, because a browser demo has no way back into a dropped call.
+- Why: without `pagehide`, a closed tab took about 30 s to reach aiortc in a local test. With it, closing the real page marked the session dropped in about 55 ms, and End call put the text on the page in about 0.1 s. A silent connection produced the text in 4.1 s. A 30-second gap would read as a bug in a demo.
 - Revisit if: real telephony is added, which reports hang-ups differently.
 
 ## D13. Identity on SMS: trust a verified session (2026-11-06)

@@ -211,7 +211,26 @@ def lead_for(outcome, session, facts):
     return None
 
 
+def first_text(session, facts):
+    """The opening text after a dropped call. It names no drug until the session is verified."""
+    step = next_step(session)
+    opening = "Looks like we got disconnected!"
+    if step is Step.IDENTIFY:
+        return f"{opening} What's your full name and date of birth?"
+    if step is Step.MEDICATION:
+        return f"{opening} Which medication would you like to refill: {medication_list(facts, 'sms')}?"
+    refill = f"I have your {facts.chosen['medication']} refill started."
+    if step is Step.PHARMACY:
+        on_file = pharmacy_label(facts.pharmacy_on_file, "sms")
+        return f"{opening} {refill} Which pharmacy would you like to use? I have {on_file} on file."
+    if step is Step.INSURANCE:
+        return f"{opening} {refill} {pending_question(session, facts)}"
+    return f"{opening} {pending_question(session, facts)}"
+
+
 def closing_line(session):
+    if session["channel"] == "sms" and session["status"] == "dropped":
+        return "No problem. Text me whenever you're ready to finish."
     match session["status"]:
         case "completed":
             return "Your request is in, and the pharmacy will take it from here. Goodbye."

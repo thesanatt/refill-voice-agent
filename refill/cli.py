@@ -2,7 +2,7 @@ import argparse
 import asyncio
 import sys
 
-from refill.core import drop_session, handle_turn, open_session
+from refill.core import finish_call, handle_turn, open_session
 from refill.db import init_db, load_session, transaction
 from refill.steps import next_step
 
@@ -33,8 +33,8 @@ async def main():
     for raw_line in sys.stdin:
         text = raw_line.strip()
         if text == "/drop":
-            drop_session(session_id)
-            break
+            print(f"text: {finish_call(session_id)}")
+            continue
         if text == "/state":
             print_state(session_id)
         elif text:

@@ -5,34 +5,53 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Refill Line</title>
 <style>
-  :root { --ink: #1c1a17; --muted: #6b655c; --paper: #fbfaf7; --line: #ddd8cf; --accent: #0f6b57; --stop: #a3341f; }
+  :root { --ink: #1c1a17; --muted: #6b655c; --paper: #fbfaf7; --line: #ddd8cf; --accent: #0f6b57; --stop: #a3341f; --bubble: #e9e5dc; }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.5 Georgia, "Times New Roman", serif; }
-  main { max-width: 640px; margin: 0 auto; padding: 32px 16px; }
-  h1 { font-size: 1.4rem; margin: 0 0 4px; }
-  #status { color: var(--muted); margin: 0 0 20px; font-family: system-ui, sans-serif; font-size: .9rem; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 32px; max-width: 1000px; margin: 0 auto; padding: 32px 16px; }
+  h1, h2 { font-size: 1.4rem; margin: 0 0 4px; }
+  .status { color: var(--muted); margin: 0 0 20px; font-family: system-ui, sans-serif; font-size: .9rem; }
   button { font: 600 1rem system-ui, sans-serif; padding: 10px 18px; border: 0; border-radius: 4px; color: #fff; background: var(--accent); cursor: pointer; }
   button.stop { background: var(--stop); }
-  button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  button:disabled { background: var(--line); cursor: default; }
   #keys { display: none; gap: 12px; margin: 20px 0 0; }
   #keys.on { display: flex; }
   #keys button { flex: 1; min-height: 64px; color: var(--ink); background: #fff; border: 2px solid var(--accent); }
   #log { margin: 24px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
   #log li { padding: 10px 0; border-bottom: 1px solid var(--line); }
   #log b { display: block; font: 600 .75rem system-ui, sans-serif; color: var(--muted); }
+  #phone { border: 1px solid var(--line); border-radius: 8px; padding: 16px; background: #fff; align-self: start; }
+  #thread { display: flex; flex-direction: column; gap: 8px; min-height: 240px; max-height: 60vh; overflow-y: auto; margin: 0 0 12px; padding: 0; list-style: none; }
+  #thread li { max-width: 85%; padding: 8px 12px; border-radius: 12px; background: var(--bubble); font: 15px/1.4 system-ui, sans-serif; }
+  #thread li.patient { align-self: flex-end; background: var(--accent); color: #fff; }
+  #reply { display: flex; gap: 8px; }
+  #reply input { flex: 1; min-width: 0; padding: 10px; font: 16px system-ui, sans-serif; border: 1px solid var(--line); border-radius: 4px; }
+  @media (max-width: 720px) { main { grid-template-columns: minmax(0, 1fr); } }
 </style>
 </head>
 <body>
 <main>
-  <h1>Refill line</h1>
-  <p id="status" role="status">Not connected</p>
-  <button id="call" type="button">Start call</button>
-  <div id="keys" role="group" aria-label="Phone keys">
-    <button type="button" data-key="*">* Go back</button>
-    <button type="button" data-key="#"># Main menu</button>
-  </div>
-  <ol id="log"></ol>
-  <audio id="agent" autoplay></audio>
+  <section aria-label="Phone call">
+    <h1>Refill line</h1>
+    <p id="status" class="status" role="status">Not connected</p>
+    <button id="call" type="button">Start call</button>
+    <div id="keys" role="group" aria-label="Phone keys">
+      <button type="button" data-key="*">* Go back</button>
+      <button type="button" data-key="#"># Main menu</button>
+    </div>
+    <ol id="log"></ol>
+    <audio id="agent" autoplay></audio>
+  </section>
+  <section id="phone" aria-label="Text messages">
+    <h2>Texts</h2>
+    <p class="status">To (555) 867-5309</p>
+    <ol id="thread" aria-live="polite"></ol>
+    <form id="reply">
+      <input id="text" type="text" autocomplete="off" aria-label="Reply" placeholder="Reply" disabled>
+      <button id="send" type="submit" disabled>Send</button>
+    </form>
+  </section>
 </main>
 <script>
   const statusLine = document.getElementById("status");
@@ -40,12 +59,20 @@
   const log = document.getElementById("log");
   const agentAudio = document.getElementById("agent");
   const keys = document.getElementById("keys");
+  const thread = document.getElementById("thread");
+  const replyForm = document.getElementById("reply");
+  const replyText = document.getElementById("text");
+  const sendButton = document.getElementById("send");
+  const HEARTBEAT_MS = 1000;
+  const TEXT_POLL_MS = 1000;
   let connection = null;
   let microphone = null;
   let messages = null;
+  let heartbeat = null;
+  let lastTextId = 0;
 
-  function pressKey(key) {
-    if (messages?.readyState === "open") messages.send(JSON.stringify({ type: "keypad", key }));
+  function sendToServer(message) {
+    if (messages?.readyState === "open") messages.send(JSON.stringify(message));
   }
 
   function setCallUi(inCall, message) {
@@ -84,6 +111,7 @@
     connection = peer;
     messages = peer.createDataChannel("chat", { ordered: true });
     messages.onmessage = (event) => addLine(JSON.parse(event.data));
+    heartbeat = setInterval(() => sendToServer({ type: "heartbeat" }), HEARTBEAT_MS);
     peer.addTransceiver(microphone.getAudioTracks()[0], { direction: "sendrecv" });
     peer.ontrack = (event) => { agentAudio.srcObject = new MediaStream([event.track]); };
     peer.onconnectionstatechange = () => {
@@ -102,21 +130,50 @@
 
   function endCall() {
     if (!connection) return;
+    clearInterval(heartbeat);
     connection.close();
     connection = null;
     microphone?.getTracks().forEach((track) => track.stop());
     setCallUi(false, "Call ended");
   }
 
+  async function pollTexts() {
+    const response = await fetch(`/api/sms?after=${lastTextId}`);
+    for (const { id, role, text } of await response.json()) {
+      const bubble = document.createElement("li");
+      bubble.className = role;
+      bubble.textContent = text;
+      thread.append(bubble);
+      bubble.scrollIntoView({ block: "nearest" });
+      lastTextId = id;
+      replyText.disabled = false;
+      sendButton.disabled = false;
+    }
+  }
+
   callButton.addEventListener("click", () => {
     if (connection) endCall();
     else startCall().catch((error) => { endCall(); setCallUi(false, `Could not start: ${error.message}`); });
   });
+  keys.addEventListener("click", (event) => sendToServer({ type: "keypad", key: event.target.dataset.key }));
   window.addEventListener("pagehide", endCall);
-  keys.addEventListener("click", (event) => pressKey(event.target.dataset.key));
   window.addEventListener("keydown", (event) => {
-    if (event.key === "*" || event.key === "#") pressKey(event.key);
+    const typing = event.target === replyText;
+    if (!typing && (event.key === "*" || event.key === "#")) sendToServer({ type: "keypad", key: event.key });
   });
+  replyForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const text = replyText.value.trim();
+    if (!text) return;
+    replyText.value = "";
+    await fetch("/api/sms", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    await pollTexts();
+  });
+  setInterval(() => pollTexts().catch(() => {}), TEXT_POLL_MS);
 </script>
 </body>
 </html>

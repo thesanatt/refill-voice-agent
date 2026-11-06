@@ -6,7 +6,7 @@ from pathlib import Path
 
 os.environ["REFILL_DB_PATH"] = str(Path(tempfile.mkdtemp()) / "exit_checks.db")
 
-from refill.core import begin_turn, drop_session, handle_turn, open_session
+from refill.core import begin_turn, finish_call, handle_turn, open_session
 from refill.db import init_db, load_session, transaction
 from refill.reader import state_note
 from refill.render import load_facts
@@ -21,7 +21,7 @@ async def main():
         sid, _ = open_session("(555) 867-5309", "voice")
         for text in script[:n]:
             await handle_turn(sid, text)
-        drop_session(sid); drop_session(sid)
+        finish_call(sid); finish_call(sid)
         with transaction() as c:
             s = load_session(c, sid); req = c.execute("SELECT count(*) FROM refill_requests WHERE session_id=?", (sid,)).fetchone()[0]
         got = next_step(s).value; ok = got == want and s["status"] == "dropped" and req == 0

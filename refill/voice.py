@@ -40,7 +40,7 @@ from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import Speec
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from refill.core import (
-    drop_session,
+    close_call,
     handle_turn,
     mark_reply_unheard,
     open_session,
@@ -61,6 +61,7 @@ STT_MODEL = "universal-3-6-pro"
 TTS_MODEL = "inworld-tts-2"
 TTS_VOICE = "Ashley"
 KEYPAD_COMMANDS = {"*": "go back", "#": "main menu"}
+LOST_CONNECTION_SECONDS = 4.0
 WORKING_PHRASES = ("One moment.", "Let me check that.", "Just a second.")
 WORKING_PHRASE_AFTER_SECONDS = 1.5
 MAX_WORKING_PHRASES = 3
@@ -345,8 +346,25 @@ async def run_call(connection):
     async def on_audio_data(_recorder, audio, sample_rate, num_channels):
         await asyncio.to_thread(save_recording, session_id, audio, sample_rate, num_channels)
 
+    last_heartbeat = None
+
+    async def watch_for_lost_connection():
+        while True:
+            await asyncio.sleep(1)
+            if last_heartbeat and time.monotonic() - last_heartbeat > LOST_CONNECTION_SECONDS:
+                await end_call()
+                return
+
+    async def end_call():
+        await recorder.stop_recording()
+        await close_call(session_id)
+        await task.cancel()
+
     @transport.event_handler("on_app_message")
     async def on_app_message(_transport, message, _sender):
+        nonlocal last_heartbeat
+        if isinstance(message, dict) and message.get("type") == "heartbeat":
+            last_heartbeat = time.monotonic()
         if isinstance(message, dict) and message.get("type") == "keypad" and message.get("key") in KEYPAD_COMMANDS:
             await task.queue_frame(InputDTMFFrame(button=KeypadEntry(message["key"])))
 
@@ -358,8 +376,11 @@ async def run_call(connection):
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(_transport, _client):
-        await recorder.stop_recording()
-        await asyncio.to_thread(drop_session, session_id)
-        await task.cancel()
+        await end_call()
 
-    await PipelineRunner(handle_sigint=False).run(task)
+    watcher = asyncio.ensure_future(watch_for_lost_connection())
+    try:
+        await PipelineRunner(handle_sigint=False).run(task)
+    finally:
+        watcher.cancel()
+        await close_call(session_id)
