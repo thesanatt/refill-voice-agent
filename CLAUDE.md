@@ -2,7 +2,7 @@
 
 A voice agent for a pharmacy phone line. A patient calls, verifies their identity and requests a refill: they pick a medication, confirm the pharmacy, confirm their insurance and hear their copay. If the call drops before the request is complete, the conversation continues over SMS from the step where it stopped.
 
-The problem statement, demo data and kickoff clarifications are in `docs/SPEC.md`. Design decisions are logged in `docs/DECISIONS.md`.
+The original problem statement is `docs/TAKE_HOME.md` (verbatim). Clarifications from the kickoff call are in `docs/KICKOFF_NOTES.md`. Design decisions are logged in `docs/DECISIONS.md`.
 
 ## Scope
 
@@ -12,7 +12,7 @@ In scope:
 - The full happy path by voice, and the SMS fallback from any point in the call.
 - A completed refill request record holding every collected field.
 
-Not yet: real telephony or SMS providers, authentication, multiple patients, recovery after a server restart, a polished UI, test suites and CI. The extensions in `docs/SPEC.md` start only after the core flow works end to end, several runs in a row.
+Not yet: real telephony or SMS providers, authentication, multiple patients, recovery after a server restart, a polished UI, test suites and CI. The extensions in `docs/TAKE_HOME.md` start only after the core flow works end to end, several runs in a row.
 
 ## The flow
 
@@ -43,4 +43,10 @@ Not yet: real telephony or SMS providers, authentication, multiple patients, rec
 - Build in thin vertical slices: first a text-only agent loop with tools and database state, then voice, then the SMS fallback, then latency work.
 - After each slice, run the happy path end to end, then commit with a clear message.
 - Keep the code small and readable: clear names over comments, no dead code.
-- Coding-agent session transcripts are exported to `agent-logs/` at the end.
+- Every session is logged from its first turn: a Stop hook exports the transcript to `agent-logs/` after each response (`.claude/hooks/export_transcript.py`). Commit the logs with the code.
+
+## Repository
+
+- The code lives in a private GitHub repository. If `git remote -v` is empty, create it with `gh repo create refill-voice-agent --private --source=. --push` (the `gh` CLI is logged in).
+- Push after every working slice, so work can continue from a second machine (Windows). Keep scripts and setup steps cross-platform.
+- The finished repository, with `agent-logs/`, is shared with the reviewers at submission.

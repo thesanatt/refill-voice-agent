@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/export_transcript.py\" 2>/dev/null || python \"$CLAUDE_PROJECT_DIR/.claude/hooks/export_transcript.py\"" } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/export_transcript.py\" 2>/dev/null || python \"$CLAUDE_PROJECT_DIR/.claude/hooks/export_transcript.py\"" } ] }
+    ]
+  }
+}
