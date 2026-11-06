@@ -152,7 +152,7 @@ def greeting():
     )
 
 
-def pending_question(session, facts):
+def pending_question(session, facts, list_already_read=False):
     channel = session["channel"]
     step = next_step(session)
     if step is Step.IDENTIFY:
@@ -161,6 +161,8 @@ def pending_question(session, facts):
         if session["identity_failures"]:
             return "Can you tell me your date of birth again?"
         return "What's your full name and date of birth?"
+    if step is Step.MEDICATION and list_already_read:
+        return "Which one do you need? I can read the list again."
     if step is Step.MEDICATION:
         return f"I see {medication_list(facts, channel)}. Which one do you need?"
     if step is Step.PHARMACY:
@@ -194,6 +196,10 @@ def lead_for(outcome, session, facts):
             return "That's okay."
         case "answer_cleared":
             return "No problem."
+        case "started_over":
+            return "No problem, let's start again."
+        case "nothing_to_change":
+            return "We're at the first question."
         case "one_at_a_time":
             return "I can do one refill at a time, so let's start with one."
         case "identity_mismatch":
@@ -225,7 +231,13 @@ def after_close_line(session, facts):
     return "A pharmacist will call you back."
 
 
-def compose_reply(session, facts, outcomes, known_facts, patient_text):
+def trouble_hint(session):
+    if session["channel"] == "voice" and session["verified_at"]:
+        return "You can also press star to go back, or pound for the main menu."
+    return "You can also ask for a pharmacist."
+
+
+def compose_reply(session, facts, outcomes, known_facts, patient_text, list_already_read=False):
     if session["status"] != "active":
         return Composed(closing_line(session), asked_pending=False)
     codes = [outcome.code for outcome in outcomes]
@@ -251,9 +263,12 @@ def compose_reply(session, facts, outcomes, known_facts, patient_text):
     lines = [line for line in lines if line]
     if len(lines) > 1 and ACKNOWLEDGEMENT in lines:
         lines.remove(ACKNOWLEDGEMENT)
-    if not lines and "repeat" not in codes and all(code in NO_PROGRESS_OUTCOMES for code in codes):
+    price_unheard = next_step(session) is Step.CONFIRM and not session["price_stated_at"] and "refused" in codes
+    if price_unheard:
+        lines.append("Let me finish the details first.")
+    elif not lines and "repeat" not in codes and all(code in NO_PROGRESS_OUTCOMES for code in codes):
         lines.append("That's okay." if UNSURE.search(patient_text) else "Sorry, I didn't catch that.")
-    lines.append(pending_question(session, facts))
+    lines.append(pending_question(session, facts, list_already_read and "repeat" not in codes))
     if session["unclear_turns"] >= 2:
-        lines.append("You can also ask for a pharmacist.")
+        lines.append(trouble_hint(session))
     return Composed(" ".join(lines), asked_pending=True, blocked_answer=blocked_answer)

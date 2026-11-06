@@ -1088,10 +1088,248 @@
     "verified": false
    },
    "hear": [
-    "I still need this"
+    "ask for a pharmacist"
    ],
    "avoid": [
     "Lisinopril"
+   ]
+  },
+  "hello_first": {
+   "lines": [
+    "Hello.",
+    "Sarah Chen, March 15 1985"
+   ],
+   "channel": "voice",
+   "want": {
+    "verified": true
+   },
+   "hear": [
+    "Hi there"
+   ],
+   "avoid": [
+    "need this to keep going",
+    "Sorry"
+   ]
+  },
+  "services_question": {
+   "lines": [
+    "What all services do you provide?",
+    "How are you?",
+    "Sarah Chen, March 15 1985"
+   ],
+   "channel": "voice",
+   "want": {
+    "verified": true
+   },
+   "hear": [
+    "refill a prescription",
+    "doing well"
+   ],
+   "avoid": []
+  },
+  "reversed_name": {
+   "lines": [
+    "Chen Sarah, March 15 1985",
+    "lisinopril"
+   ],
+   "channel": "voice",
+   "want": {
+    "verified": true,
+    "rx": 1
+   },
+   "hear": [],
+   "avoid": [
+    "couldn't match"
+   ]
+  },
+  "last_two": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "the last 2.",
+    "metformin"
+   ],
+   "channel": "voice",
+   "want": {
+    "rx": 2
+   },
+   "hear": [
+    "one refill at a time"
+   ],
+   "avoid": []
+  },
+  "two_purposes": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "Diabetes and cholesterol.",
+    "cholesterol"
+   ],
+   "channel": "voice",
+   "want": {
+    "rx": 3
+   },
+   "hear": [
+    "one refill at a time"
+   ],
+   "avoid": [
+    "Sorry"
+   ]
+  },
+  "list_not_reread": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "All 3."
+   ],
+   "channel": "voice",
+   "want": {
+    "rx": null
+   },
+   "hear": [
+    "read the list again"
+   ],
+   "avoid": []
+  },
+  "list_reread_on_request": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "All 3.",
+    "repeat that"
+   ],
+   "channel": "voice",
+   "want": {
+    "rx": null
+   },
+   "hear": [
+    "I see Lisinopril for blood pressure, Metformin for diabetes and Atorvastatin for cholesterol. Which one do you need?"
+   ],
+   "avoid": []
+  },
+  "exact_go_back": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "lisinopril",
+    "go back",
+    "metformin"
+   ],
+   "channel": "voice",
+   "want": {
+    "rx": 2
+   },
+   "hear": [
+    "No problem"
+   ],
+   "avoid": [
+    "Sorry"
+   ]
+  },
+  "exact_main_menu": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "lisinopril",
+    "yes",
+    "yes",
+    "main menu",
+    "metformin",
+    "yes",
+    "yes",
+    "yes"
+   ],
+   "channel": "voice",
+   "want": {
+    "status": "completed",
+    "rx": 2,
+    "copay": 1000
+   },
+   "hear": [
+    "let's start again"
+   ],
+   "avoid": [
+    "Sorry"
+   ]
+  },
+  "go_back_at_start": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "go back"
+   ],
+   "channel": "voice",
+   "want": {
+    "rx": null
+   },
+   "hear": [
+    "first question"
+   ],
+   "avoid": [
+    "Sorry"
+   ]
+  },
+  "go_back_before_verified": {
+   "lines": [
+    "go back"
+   ],
+   "channel": "voice",
+   "want": {
+    "verified": false
+   },
+   "hear": [],
+   "avoid": [
+    "Sorry"
+   ]
+  },
+  "exact_pharmacist": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "pharmacist please",
+    "lisinopril"
+   ],
+   "channel": "voice",
+   "want": {
+    "rx": 1,
+    "flag": 1,
+    "reason": "asked_for_person"
+   },
+   "hear": [
+    "asked a pharmacist"
+   ],
+   "avoid": []
+  },
+  "exact_pharmacy_name": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "lisinopril",
+    "no",
+    "Walgreens",
+    "yes",
+    "yes"
+   ],
+   "channel": "voice",
+   "want": {
+    "status": "completed",
+    "pharm": 2
+   },
+   "hear": [],
+   "avoid": [
+    "Sorry"
+   ]
+  },
+  "exact_not_sure": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "lisinopril",
+    "yes",
+    "not sure",
+    "yes"
+   ],
+   "channel": "voice",
+   "want": {
+    "status": "completed",
+    "ins": "unsure",
+    "req_flag": 1
+   },
+   "hear": [
+    "pharmacy can check"
+   ],
+   "avoid": [
+    "Sorry"
    ]
   }
  },

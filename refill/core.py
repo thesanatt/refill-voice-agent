@@ -18,6 +18,7 @@ from refill.steps import FINISHED_STATUSES, Step, allowed_tools, next_step
 from refill.tools import definitions_for, mentions_refill_details, run_tool
 
 LAST_EXCHANGE_MESSAGES = 3
+IDENTITY_FAILURE_LINES = ("I couldn't match that", "I'm not able to verify that")
 
 session_locks = defaultdict(asyncio.Lock)
 
@@ -59,7 +60,11 @@ def drop_session(session_id):
 
 def mark_reply_unheard(session_id):
     with transaction() as conn:
-        update_session(conn, session_id, price_stated_at=None)
+        session = load_session(conn, session_id)
+        last_line = last_agent_lines(conn, session_id, 1)[0]
+        attempt_went_unheard = last_line.startswith(IDENTITY_FAILURE_LINES)
+        failures = max(0, session["identity_failures"] - attempt_went_unheard)
+        update_session(conn, session_id, price_stated_at=None, identity_failures=failures)
         conn.execute(
             """
             UPDATE messages SET interrupted = 1
@@ -67,6 +72,14 @@ def mark_reply_unheard(session_id):
             """,
             (session_id,),
         )
+
+
+def last_agent_lines(conn, session_id, count):
+    rows = conn.execute(
+        "SELECT text FROM messages WHERE session_id = ? AND role = 'agent' ORDER BY id DESC LIMIT ?",
+        (session_id, count),
+    )
+    return [row["text"] for row in rows]
 
 
 def pending_line(session_id):
@@ -149,12 +162,18 @@ def run_calls(session_id, calls, pending_step, patient_text):
 
 
 def rephrased_if_repeated(conn, session_id, text):
-    last_line = conn.execute(
-        "SELECT text FROM messages WHERE session_id = ? AND role = 'agent' ORDER BY id DESC LIMIT 1", (session_id,)
-    ).fetchone()
-    if last_line and last_line["text"].endswith(text):
-        return f"I still need this before I can go on. {text}"
+    recent = last_agent_lines(conn, session_id, 2)
+    if len(recent) == 2 and all(line.endswith(text) for line in recent):
+        return f"Sorry, I need this to keep going. {text}"
     return text
+
+
+def list_already_read(conn, session_id):
+    row = conn.execute(
+        "SELECT 1 FROM messages WHERE session_id = ? AND role = 'agent' AND text LIKE '%Which one do you need%'",
+        (session_id,),
+    ).fetchone()
+    return row is not None
 
 
 def finish_turn(session_id, turn, text, calls, outcomes, error_code, llm_ms, started):
@@ -164,7 +183,8 @@ def finish_turn(session_id, turn, text, calls, outcomes, error_code, llm_ms, sta
         unclear_turns = 0 if made_progress else session["unclear_turns"] + 1
         update_session(conn, session_id, unclear_turns=unclear_turns)
         session = load_session(conn, session_id)
-        composed = compose_reply(session, load_facts(conn, session), outcomes, turn.note, text)
+        facts = load_facts(conn, session)
+        composed = compose_reply(session, facts, outcomes, turn.note, text, list_already_read(conn, session_id))
         if composed.asked_pending and next_step(session) is Step.CONFIRM:
             update_session(conn, session_id, price_stated_at=utc_now())
         reply_text = rephrased_if_repeated(conn, session_id, composed.text)

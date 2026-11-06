@@ -109,7 +109,10 @@ Format:
 | "What?" or "Can you repeat that?" | The last line is rendered again from state. |
 | "Hold on" | The agent waits quietly for up to about 30 s. |
 | Silence | A gentle re-ask at about 10 s and "Take your time" at about 20 s. Whether long silence ends the call is left to Q5. |
-| Background talk or unclear speech | "Sorry, I didn't catch that", then the question again. After two misses it offers a pharmacist, and an identical line is rephrased rather than repeated. |
+| Background talk or unclear speech | "Sorry, I didn't catch that", then the question again. After two misses it mentions the keys or a pharmacist, and a third identical line is rephrased. |
+| A greeting, "how are you" or "what can you do" | A short fixed answer, then the pending question. |
+| A second identity attempt inside one breath | An attempt only counts if the patient heard the reply, so fragments of one sentence cannot cause a lockout. A name given surname first still matches. |
+| The drug list is needed again | Read in full once. After that the agent says it can read the list again, and does so on request. |
 | "I have to go" or "text me instead" | `end_call`: the agent says it will text, then the SMS path runs. |
 | A drug not on the list | "I don't see that one on your list", then the list again and an offer of a pharmacist. |
 | A different pharmacy not in the table | Stored as patient text, read back and flagged for staff. |
@@ -191,6 +194,12 @@ Documented but not built: a patient calling back during an open SMS thread, seve
 - Chosen: C. Identity turns keep the whole conversation, and the extra read after verification does too.
 - Why: the model re-recorded old answers it could see, which took output from about 42 to about 150 tokens and added about 0.6 s. B looked better on speed and call counts, but failed on correctness: the model re-recorded first and stopped, so "no, don't send it" failed 3 of 3 runs. C removes the cause, and typed tests showed no loss of accuracy.
 - Revisit if: a real call shows the model losing a reference to something said two turns earlier.
+
+## D18. Two phone keys: go back and main menu (2026-11-06)
+- Options: (A) no keys; (B) a full keypad with numbered choices at every step; (C) two fixed keys.
+- Chosen: C. Star goes back one answer and pound returns to the main menu. They are always the same, sit on the page during a call, and also work from a computer keyboard. They arrive as `InputDTMFFrame`, so a real phone line would use the same path. Each key becomes the words "go back" or "main menu" and runs through the same turn handler, gates and logging. Everything else stays spoken.
+- Why: speech recognition is the part most likely to fail a confused or stuck caller, and a key always works. Keys reply in about 0.3 s because they skip speech-to-text and the LLM. A 12-key pad was built and tested first, and dropped at the engineer's request: changing labels are more to read, and typing a date needs 0, which callers expect to mean a person.
+- Revisit if: real telephony is added, when the agent must announce the keys and callers cannot see them.
 
 ## Open questions
 

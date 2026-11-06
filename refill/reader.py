@@ -57,7 +57,7 @@ not listed. If the patient says no without naming a pharmacy, pass null for both
 asked_for_person when they ask for a person or pharmacist, and urgent for emergency language such as chest pain, \
 trouble breathing, overdose or self-harm. Never use urgent if the patient says it is not an emergency.
 - change_answer: for "I want to change my medicine", "wrong one", or "go back", when the new value is not given. \
-Use the field named, or previous for "go back".
+Use the field named, previous for "go back", or all for "start over" or "main menu".
 - end_call: use patient_leaving for "I have to go" or "text me instead", and declined for "no" to sending the \
 request, "never mind", or "no" to a pharmacist calling back.
 
@@ -81,7 +81,15 @@ SOMEONE_ELSE = re.compile(
     r".*\b(prescription|medication|medicine|record|refill|pharmacy|insurance)",
     re.IGNORECASE,
 )
-SEVERAL_REFILLS = re.compile(r"\b(all (?:of them|three|3)|both)\b", re.IGNORECASE)
+SEVERAL_REFILLS = re.compile(r"\b(all (?:of them|three|3)|both|(?:first|last) (?:two|2))\b", re.IGNORECASE)
+GO_BACK = {"go back", "back", "go back please", "previous step", "go to the previous step", "go back one step"}
+MAIN_MENU = {"main menu", "start over", "start again", "go to the main menu"}
+REPEAT = {"repeat", "repeat that", "say that again", "can you repeat that", "what", "pardon"}
+ASK_FOR_PHARMACIST = {
+    "pharmacist", "pharmacist please", "a pharmacist", "talk to a pharmacist", "speak to a pharmacist", "operator",
+    "representative", "a person", "a real person",
+}  # fmt: skip
+NOT_SURE = {"not sure", "i'm not sure", "i am not sure", "i don't know", "dont know", "no idea"}
 EXACT_YES = {
     "yes", "yeah", "yep", "yup", "yes please", "yeah please", "correct", "thats right", "that's right", "sure", "ok",
     "okay", "yes it is", "go ahead", "send it", "yes send it", "okay send it", "please do", "sounds good",
@@ -176,17 +184,50 @@ def spoken_words(text):
     return FILLERS.sub(" ", text.lower()).translate(PUNCTUATION).split()
 
 
+def names_several_prescriptions(facts, text):
+    lowered = text.lower()
+    return sum(p["medication"].lower() in lowered or p["indication"] in lowered for p in facts.prescriptions) >= 2
+
+
+def pharmacy_names(pharmacy):
+    name = pharmacy["name"].lower()
+    return {name, name.split()[0]}
+
+
+def navigation_call(session, words):
+    if words in REPEAT:
+        return ToolCall("respond", {"kind": "repeat", "text": None})
+    if words in ASK_FOR_PHARMACIST:
+        return ToolCall("request_pharmacist", {"reason": "asked_for_person"})
+    if words in GO_BACK or words in MAIN_MENU:
+        if not session["verified_at"]:
+            return ToolCall("respond", {"kind": "repeat", "text": None})
+        return ToolCall("change_answer", {"field": "previous" if words in GO_BACK else "all"})
+    return None
+
+
 def exact_reading(session, facts, text):
     """Handle the few answers that need no interpretation, using the same tools the model would call."""
+    words = " ".join(spoken_words(text))
+    navigation = navigation_call(session, words)
+    if navigation:
+        return Reading(calls=(navigation,))
     if not session["verified_at"]:
         return None
     if SOMEONE_ELSE.search(text):
         refusal = FIXED_ANSWERS["Anyone else's records, or another patient"]
         return Reading(calls=(ToolCall("respond", {"kind": "answer", "text": refusal}),))
-    if SEVERAL_REFILLS.search(text) or sum(p["medication"].lower() in text.lower() for p in facts.prescriptions) >= 2:
+    if SEVERAL_REFILLS.search(text) or names_several_prescriptions(facts, text):
         return Reading(calls=(ToolCall("respond", {"kind": "one_at_a_time", "text": None}),))
-    words = " ".join(spoken_words(text))
     step = next_step(session)
+    if step is Step.INSURANCE and words in NOT_SURE:
+        return Reading(calls=(ToolCall("confirm_insurance", {"status": "unsure"}),))
+    if words in NOT_SURE:
+        return Reading(calls=(ToolCall("respond", {"kind": "unsure", "text": None}),))
+    if step is Step.PHARMACY:
+        pharmacy = next((p for p in facts.pharmacies if words in pharmacy_names(p)), None)
+        if pharmacy:
+            return Reading(calls=(ToolCall("confirm_pharmacy", {"pharmacy_id": pharmacy["id"], "other_pharmacy": None}),))
     if step is Step.MEDICATION:
         chosen = next((p for p in facts.prescriptions if p["medication"].lower() == words), None)
         return Reading(calls=(ToolCall("select_medication", {"prescription_id": chosen["id"]}),)) if chosen else None

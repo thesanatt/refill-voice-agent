@@ -6,12 +6,14 @@ import wave
 from pathlib import Path
 
 from dotenv import load_dotenv
+from pipecat.audio.dtmf.types import KeypadEntry
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
     CancelFrame,
     EndFrame,
+    InputDTMFFrame,
     InterruptionFrame,
     LLMContextFrame,
     OutputTransportMessageUrgentFrame,
@@ -58,6 +60,7 @@ RECORDINGS_DIR = Path(__file__).parent.parent / "recordings"
 STT_MODEL = "universal-3-6-pro"
 TTS_MODEL = "inworld-tts-2"
 TTS_VOICE = "Ashley"
+KEYPAD_COMMANDS = {"*": "go back", "#": "main menu"}
 WORKING_PHRASES = ("One moment.", "Let me check that.", "Just a second.")
 WORKING_PHRASE_AFTER_SECONDS = 1.5
 MAX_WORKING_PHRASES = 3
@@ -190,6 +193,9 @@ class CallBridge(FrameProcessor):
         if isinstance(frame, LLMContextFrame):
             await self._queue_turn(frame.context)
             return
+        if isinstance(frame, InputDTMFFrame):
+            await self._handle_key(frame.button.value)
+            return
         if isinstance(frame, InterruptionFrame):
             await self._handle_interruption()
         elif isinstance(frame, BotStartedSpeakingFrame):
@@ -200,6 +206,17 @@ class CallBridge(FrameProcessor):
 
     async def greet(self, line):
         await self._speak_line(line)
+
+    async def _handle_key(self, key):
+        command = KEYPAD_COMMANDS.get(key)
+        if command is None:
+            return
+        await self.broadcast_interruption()
+        await self._handle_interruption()
+        self._merge_next_turn = False
+        self._reply_unfinished = True
+        self._line_started_at = None
+        await self._turns.put((command, f"Pressed {key}: {command}"))
 
     async def handle_idle(self):
         self._idle_prompts += 1
@@ -216,16 +233,16 @@ class CallBridge(FrameProcessor):
         self._reply_unfinished = True
         self._line_started_at = None
         self._idle_prompts = 0
-        await self._turns.put(text)
+        await self._turns.put((text, None))
 
     async def _run_turns(self):
         while True:
-            text = await self._turns.get()
+            text, shown_as = await self._turns.get()
             if self._merge_next_turn:
                 text = f"{self._unanswered_text} {text}".strip()
                 self._merge_next_turn = False
             generation = self._generation
-            await self._show("patient", text)
+            await self._show("patient", shown_as or text)
             reply = await self._reply_with_working_phrase(text, generation)
             self._unanswered_text = "" if reply.advanced else text
             if generation != self._generation and not reply.ends_conversation:
@@ -327,6 +344,11 @@ async def run_call(connection):
     @recorder.event_handler("on_audio_data")
     async def on_audio_data(_recorder, audio, sample_rate, num_channels):
         await asyncio.to_thread(save_recording, session_id, audio, sample_rate, num_channels)
+
+    @transport.event_handler("on_app_message")
+    async def on_app_message(_transport, message, _sender):
+        if isinstance(message, dict) and message.get("type") == "keypad" and message.get("key") in KEYPAD_COMMANDS:
+            await task.queue_frame(InputDTMFFrame(button=KeypadEntry(message["key"])))
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(_transport, _client):

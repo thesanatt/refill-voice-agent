@@ -2,6 +2,9 @@ import re
 
 MAX_SENTENCES = 2
 FIXED_ANSWERS = {
+    "A greeting such as hello": "Hi there.",
+    "How are you": "I'm doing well, thanks.",
+    "What can you do, or what services do you offer": "I can help you refill a prescription. A pharmacist can help with anything else.",
     "Are you a real person": "I'm an automated assistant for Demo Pharmacy.",
     "Why do you need that": "I need it to make sure I'm speaking with the right person.",
     "The price, before it has been given": "I can tell you as soon as we confirm your details.",

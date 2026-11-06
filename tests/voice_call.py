@@ -42,6 +42,11 @@ TURN_TIMEOUT_SECONDS = 25
 class Say:
     text: str
     over_agent_after: float | None = None
+    key: str | None = None
+
+
+def press(key):
+    return Say(text="", key=key)
 
 
 IDENTITY = Say("My name is Sarah Chen, and my date of birth is March fifteenth, nineteen eighty-five.")
@@ -77,6 +82,18 @@ SCRIPTS = {
         Say("My name is Sarah, and my date of birth is March fifteenth, nineteen eighty-five."),
         Say("Sarah Chen."),
         Say("The first one."),
+    ],
+    "keypad": [
+        IDENTITY,
+        Say("The first one."),
+        press("*"),
+        Say("Metformin."),
+        Say("Yes."),
+        press("#"),
+        Say("The first one."),
+        Say("Yes."),
+        Say("Yes."),
+        Say("Yes."),
     ],
     "price_cut_off": [
         IDENTITY,
@@ -206,7 +223,7 @@ async def place_call(script, recording_path=None):
     await peer.setLocalDescription(await peer.createOffer())
     gaps = []
     async with aiohttp.ClientSession() as http:
-        clips = [await patient_audio(http, step.text) for step in script]
+        clips = [await patient_audio(http, step.text) if step.text else None for step in script]
         offer = {"sdp": peer.localDescription.sdp, "type": peer.localDescription.type}
         async with http.post(f"{SERVER}/api/offer", json=offer) as response:
             answer = await response.json()
@@ -219,8 +236,12 @@ async def place_call(script, recording_path=None):
             await ear.wait_until_quiet()
         else:
             await asyncio.sleep(step.over_agent_after)
-        microphone.speak(clip)
-        await microphone.finished_speaking.wait()
+        if step.key:
+            channel.send(json.dumps({"type": "keypad", "key": step.key}))
+            transcript.append(("key", step.key))
+        else:
+            microphone.speak(clip)
+            await microphone.finished_speaking.wait()
         speech_ended_at = time.monotonic()
         tail = 0 if step.over_agent_after is None else INTERRUPTED_AUDIO_TAIL_SECONDS
         first_audio_at = await ear.wait_for_speech_after(speech_ended_at + tail)

@@ -22,7 +22,8 @@ AFFIRMATIVE = re.compile(
 )
 NEGATIVE = re.compile(r"\b(no|nope|not|don't|dont|wait|stop|cancel|never ?mind|hold on|hang on)\b", re.IGNORECASE)
 CHANGE_REQUEST = re.compile(
-    r"\b(change|different|another|other|wrong|go back|previous|switch|instead|start over|back up)\b", re.IGNORECASE
+    r"\b(change|different|another|other|wrong|go back|previous|switch|instead|start over|back up|main menu)\b",
+    re.IGNORECASE,
 )
 TOPIC_WORDS = {
     "confirm_pharmacy": re.compile(r"pharmac|drug ?store|cvs|walgreens|walmart|send it to", re.IGNORECASE),
@@ -83,7 +84,7 @@ TOOL_DEFINITIONS = [
     tool(
         "change_answer",
         "Clear an answer so it can be given again, when the patient wants to change it without saying the new value.",
-        {"field": {"type": "string", "enum": ["medication", "pharmacy", "insurance", "previous"]}},
+        {"field": {"type": "string", "enum": ["medication", "pharmacy", "insurance", "previous", "all"]}},
     ),
     tool("submit_request", "Send the refill request after the patient says yes to sending it.", {}),
     tool(
@@ -119,11 +120,20 @@ def expanded_year(year):
     return (1900 if year > this_century else 2000) + year
 
 
+def name_similarity(spoken, on_file):
+    in_order = SequenceMatcher(None, normalized_name(spoken), normalized_name(on_file)).ratio()
+    any_order = SequenceMatcher(None, sorted_name(spoken), sorted_name(on_file)).ratio()
+    return max(in_order, any_order)
+
+
+def sorted_name(name):
+    return " ".join(sorted(normalized_name(name).split()))
+
+
 def match_patient(conn, full_name, date_of_birth):
     rows = conn.execute("SELECT * FROM patients WHERE date_of_birth = ?", (date_of_birth.isoformat(),))
     for row in rows:
-        similarity = SequenceMatcher(None, normalized_name(full_name), normalized_name(row["full_name"])).ratio()
-        if similarity >= NAME_MATCH_THRESHOLD:
+        if name_similarity(full_name, row["full_name"]) >= NAME_MATCH_THRESHOLD:
             return row
     return None
 
@@ -238,7 +248,13 @@ def end_call(conn, session, arguments):
 
 def change_answer(conn, session, arguments):
     answered = [field for field, value in ANSWERED_FIELDS.items() if value(session)]
-    field = answered[-1] if arguments["field"] == "previous" and answered else arguments["field"]
+    if not answered:
+        return [Outcome("nothing_to_change")]
+    if arguments["field"] == "all":
+        everything = {name: None for fields in CLEARED_FIELDS.values() for name in fields}
+        update_session(conn, session["id"], price_stated_at=None, **everything)
+        return [Outcome("started_over")]
+    field = answered[-1] if arguments["field"] == "previous" else arguments["field"]
     if field not in answered:
         return [Outcome("unchanged")]
     update_session(conn, session["id"], price_stated_at=None, **CLEARED_FIELDS[field])
