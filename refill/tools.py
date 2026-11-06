@@ -4,7 +4,7 @@ from datetime import date
 from difflib import SequenceMatcher
 
 from refill.db import load_session, transaction, update_session, utc_now
-from refill.guard import QUESTION
+from refill.guard import QUESTION, UNSURE
 from refill.render import load_facts, pharmacy_written
 from refill.steps import MAX_IDENTITY_FAILURES, Step, allowed_tools
 
@@ -21,8 +21,8 @@ AFFIRMATIVE = re.compile(
     re.IGNORECASE,
 )
 NEGATIVE = re.compile(r"\b(no|nope|not|don't|dont|wait|stop|cancel|never ?mind|hold on|hang on)\b", re.IGNORECASE)
-UNSURE = re.compile(
-    r"(don'?t|do not|didn'?t) (know|remember|recall)|not sure|unsure|no idea|can'?t remember", re.IGNORECASE
+CHANGE_REQUEST = re.compile(
+    r"\b(change|different|another|other|wrong|go back|previous|switch|instead|start over|back up)\b", re.IGNORECASE
 )
 TOPIC_WORDS = {
     "confirm_pharmacy": re.compile(r"pharmac|drug ?store|cvs|walgreens|walmart|send it to", re.IGNORECASE),
@@ -50,6 +50,7 @@ def tool(name, description, properties):
     }
 
 
+RESPOND_KINDS = ["answer", "repeat", "hold", "unsure", "unclear"]
 NULLABLE_TEXT = {"type": ["string", "null"]}
 NULLABLE_INTEGER = {"type": ["integer", "null"]}
 
@@ -79,6 +80,11 @@ TOOL_DEFINITIONS = [
         "Record whether the insurance on file is still current, has changed, or the patient is unsure.",
         {"status": {"type": "string", "enum": ["current", "changed", "unsure"]}},
     ),
+    tool(
+        "change_answer",
+        "Clear an answer so it can be given again, when the patient wants to change it without saying the new value.",
+        {"field": {"type": "string", "enum": ["medication", "pharmacy", "insurance", "previous"]}},
+    ),
     tool("submit_request", "Send the refill request after the patient says yes to sending it.", {}),
     tool(
         "request_pharmacist",
@@ -93,7 +99,7 @@ TOOL_DEFINITIONS = [
     tool(
         "respond",
         "Use when no other tool fits.",
-        {"kind": {"type": "string", "enum": ["answer", "repeat", "hold", "unsure", "unclear"]}, "text": NULLABLE_TEXT},
+        {"kind": {"type": "string", "enum": RESPOND_KINDS}, "text": NULLABLE_TEXT},
     ),
 ]
 
@@ -216,7 +222,7 @@ def submit_request(conn, session, _arguments):
 
 
 def request_pharmacist(conn, session, arguments):
-    if arguments["reason"] == session["pharmacist_reason"] != "urgent":
+    if arguments["reason"] == session["pharmacist_reason"]:
         return [Outcome("unchanged")]
     update_session(conn, session["id"], needs_pharmacist=1, pharmacist_reason=arguments["reason"])
     if session["identity_failures"] >= MAX_IDENTITY_FAILURES:
@@ -230,15 +236,36 @@ def end_call(conn, session, arguments):
     return [Outcome(arguments["reason"])]
 
 
+def change_answer(conn, session, arguments):
+    answered = [field for field, value in ANSWERED_FIELDS.items() if value(session)]
+    field = answered[-1] if arguments["field"] == "previous" and answered else arguments["field"]
+    if field not in answered:
+        return [Outcome("unchanged")]
+    update_session(conn, session["id"], price_stated_at=None, **CLEARED_FIELDS[field])
+    return [Outcome("answer_cleared")]
+
+
 def respond(_conn, _session, arguments):
     return [Outcome(arguments["kind"], arguments["text"] or "")]
 
+
+ANSWERED_FIELDS = {
+    "medication": lambda session: session["prescription_id"],
+    "pharmacy": lambda session: session["pharmacy_id"] or session["pharmacy_text"],
+    "insurance": lambda session: session["insurance_status"],
+}
+CLEARED_FIELDS = {
+    "medication": {"prescription_id": None},
+    "pharmacy": {"pharmacy_id": None, "pharmacy_text": None},
+    "insurance": {"insurance_status": None},
+}
 
 HANDLERS = {
     "verify_identity": verify_identity,
     "select_medication": select_medication,
     "confirm_pharmacy": confirm_pharmacy,
     "confirm_insurance": confirm_insurance,
+    "change_answer": change_answer,
     "submit_request": submit_request,
     "request_pharmacist": request_pharmacist,
     "end_call": end_call,
@@ -278,6 +305,8 @@ def confirms_what_is_on_file(conn, session, name, arguments):
 def message_supports(conn, session, name, arguments, pending_step, patient_text):
     if name == "submit_request":
         return bool(AFFIRMATIVE.search(patient_text)) and not NEGATIVE.search(patient_text)
+    if name == "change_answer":
+        return bool(CHANGE_REQUEST.search(patient_text))
     if name not in ("select_medication", "confirm_pharmacy", "confirm_insurance"):
         return True
     is_pending = PENDING_TOOLS.get(pending_step) == name

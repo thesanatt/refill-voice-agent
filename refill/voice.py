@@ -6,8 +6,6 @@ import wave
 from pathlib import Path
 
 from dotenv import load_dotenv
-from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
-from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
@@ -36,7 +34,7 @@ from pipecat.services.inworld.tts import InworldTTSService
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 from pipecat.turns.user_start.min_words_user_turn_start_strategy import MinWordsUserTurnStartStrategy
-from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import TurnAnalyzerUserTurnStopStrategy
+from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import SpeechTimeoutUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from refill.core import (
@@ -48,7 +46,10 @@ from refill.core import (
     record_first_audio,
     refill_keyterms,
 )
+from refill.reader import warm_up
 from refill.steps import Step
+from refill.tools import TOOL_DEFINITIONS, definitions_for
+from refill.turn_model import question_asked, required_silence, slot_state
 
 load_dotenv()
 
@@ -57,9 +58,9 @@ RECORDINGS_DIR = Path(__file__).parent.parent / "recordings"
 STT_MODEL = "universal-3-6-pro"
 TTS_MODEL = "inworld-tts-2"
 TTS_VOICE = "Ashley"
-DATE_OF_BIRTH_SILENCE_LIMIT_SECONDS = 3.0
-SILENCE_LIMITS = {Step.IDENTIFY: DATE_OF_BIRTH_SILENCE_LIMIT_SECONDS, Step.MEDICATION: 1.0}
-YES_NO_SILENCE_LIMIT_SECONDS = 0.6
+WORKING_PHRASES = ("One moment.", "Let me check that.", "Just a second.")
+WORKING_PHRASE_AFTER_SECONDS = 1.5
+MAX_WORKING_PHRASES = 3
 IDLE_PROMPT_SECONDS = 10.0
 HOLD_SECONDS = 30.0
 EARLY_CUT_OFF_SECONDS = 1.5
@@ -72,6 +73,13 @@ def normalized_speech(text):
     return re.sub(r"[^a-z ]", "", text.lower().replace("-", " ")).strip()
 
 
+TOOL_LISTS = [
+    definitions_for({"verify_identity", "request_pharmacist", "end_call", "respond"}),
+    definitions_for({tool["name"] for tool in TOOL_DEFINITIONS} - {"verify_identity", "submit_request"}),
+    definitions_for({tool["name"] for tool in TOOL_DEFINITIONS} - {"verify_identity"}),
+]
+
+
 def save_recording(session_id, audio, sample_rate, num_channels):
     RECORDINGS_DIR.mkdir(exist_ok=True)
     with wave.open(str(RECORDINGS_DIR / f"{session_id}.wav"), "wb") as recording:
@@ -81,9 +89,45 @@ def save_recording(session_id, audio, sample_rate, num_channels):
         recording.writeframes(audio)
 
 
-class StepAwareSmartTurn(LocalSmartTurnAnalyzerV3):
-    def set_silence_limit(self, seconds):
-        self._stop_ms = seconds * 1000
+class SlotAwareStopStrategy(SpeechTimeoutUserTurnStopStrategy):
+    def __init__(self):
+        super().__init__()
+        self._step = Step.IDENTIFY
+        self._question = "both"
+        self._vad_stopped_at = None
+
+    def expect(self, step, question):
+        self._step = step
+        self._question = question
+
+    def _remaining_wait(self, text):
+        needed = required_silence(slot_state(self._step, self._question, text), self._step)
+        elapsed = self._stop_secs + time.monotonic() - self._vad_stopped_at
+        return max(0.0, needed - elapsed)
+
+    async def handle_user_turn_stopped(self):
+        self._vad_stopped_at = None
+        await super().handle_user_turn_stopped()
+
+    async def _handle_vad_user_started_speaking(self, frame):
+        self._vad_stopped_at = None
+        await super()._handle_vad_user_started_speaking(frame)
+
+    async def _handle_vad_user_stopped_speaking(self, frame):
+        self._vad_stopped_at = time.monotonic()
+        self._stop_secs = frame.stop_secs
+        self._user_speech_timeout = self._remaining_wait(self._text)
+        await super()._handle_vad_user_stopped_speaking(frame)
+
+    async def _handle_transcription(self, frame):
+        vad_stopped = self._vad_stopped_at is not None
+        wait = self._remaining_wait(self._text + frame.text) if vad_stopped else 0.0
+        if wait > 0:
+            self._user_speech_wait_done = False
+        await super()._handle_transcription(frame)
+        if vad_stopped and not self._user_speech_wait_done:
+            self._user_speech_timeout = wait
+            await self._restart_user_speech_timer()
 
 
 class SpeechOverAgentStrategy(MinWordsUserTurnStartStrategy):
@@ -113,11 +157,12 @@ class SpeechOverAgentStrategy(MinWordsUserTurnStartStrategy):
 
 
 class CallBridge(FrameProcessor):
-    def __init__(self, session_id, smart_turn, start_strategy):
+    def __init__(self, session_id, stop_strategy, start_strategy):
         super().__init__()
         self._session_id = session_id
-        self._smart_turn = smart_turn
+        self._stop_strategy = stop_strategy
         self._start_strategy = start_strategy
+        self._working_phrases_used = 0
         self._turns = asyncio.Queue()
         self._worker = None
         self._task = None
@@ -181,7 +226,7 @@ class CallBridge(FrameProcessor):
                 self._merge_next_turn = False
             generation = self._generation
             await self._show("patient", text)
-            reply = await handle_turn(self._session_id, text)
+            reply = await self._reply_with_working_phrase(text, generation)
             self._unanswered_text = "" if reply.advanced else text
             if generation != self._generation and not reply.ends_conversation:
                 await asyncio.to_thread(mark_reply_unheard, self._session_id)
@@ -190,6 +235,16 @@ class CallBridge(FrameProcessor):
             self._ending = reply.ends_conversation
             await self._speak_line(reply.text)
 
+    async def _reply_with_working_phrase(self, text, generation):
+        reply_task = self.create_task(handle_turn(self._session_id, text))
+        finished, _ = await asyncio.wait({reply_task}, timeout=WORKING_PHRASE_AFTER_SECONDS)
+        may_speak = generation == self._generation and self._working_phrases_used < MAX_WORKING_PHRASES
+        if not finished and may_speak:
+            phrase = WORKING_PHRASES[self._working_phrases_used % len(WORKING_PHRASES)]
+            self._working_phrases_used += 1
+            await self._speak_line(phrase)
+        return await reply_task
+
     async def _speak_line(self, text):
         self._start_strategy.expect_line(text)
         self._reply_unfinished = True
@@ -197,7 +252,7 @@ class CallBridge(FrameProcessor):
         await self.push_frame(TTSSpeakFrame(text, append_to_context=False))
 
     async def _apply_step(self, reply):
-        self._smart_turn.set_silence_limit(SILENCE_LIMITS.get(reply.step, YES_NO_SILENCE_LIMIT_SECONDS))
+        self._stop_strategy.expect(reply.step, question_asked(reply.text))
         timeout = HOLD_SECONDS if reply.holding else IDLE_PROMPT_SECONDS
         await self.push_frame(UserIdleTimeoutUpdateFrame(timeout=timeout), FrameDirection.UPSTREAM)
         verified = reply.step not in (Step.IDENTIFY, Step.DONE)
@@ -241,20 +296,17 @@ async def run_call(connection):
         api_key=os.environ["INWORLD_API_KEY"],
         settings=InworldTTSService.Settings(model=TTS_MODEL, voice=TTS_VOICE),
     )
-    smart_turn = StepAwareSmartTurn(params=SmartTurnParams(stop_secs=DATE_OF_BIRTH_SILENCE_LIMIT_SECONDS))
+    stop_strategy = SlotAwareStopStrategy()
     start_strategy = SpeechOverAgentStrategy()
     user_turns = LLMUserAggregator(
         LLMContext(),
         params=LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(),
-            user_turn_strategies=UserTurnStrategies(
-                start=[start_strategy],
-                stop=[TurnAnalyzerUserTurnStopStrategy(turn_analyzer=smart_turn)],
-            ),
+            user_turn_strategies=UserTurnStrategies(start=[start_strategy], stop=[stop_strategy]),
             user_idle_timeout=IDLE_PROMPT_SECONDS,
         ),
     )
-    bridge = CallBridge(session_id, smart_turn, start_strategy)
+    bridge = CallBridge(session_id, stop_strategy, start_strategy)
     recorder = AudioBufferProcessor(num_channels=2)
     latency = UserBotLatencyObserver()
     task = PipelineTask(
@@ -280,6 +332,7 @@ async def run_call(connection):
     async def on_client_connected(_transport, _client):
         await recorder.start_recording()
         await bridge.greet(greeting)
+        asyncio.ensure_future(warm_up(TOOL_LISTS))
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(_transport, _client):

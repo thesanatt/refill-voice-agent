@@ -5,7 +5,7 @@ from time import perf_counter
 from uuid import uuid4
 
 from refill.db import add_message, load_session, transaction, update_session, utc_now
-from refill.reader import OPENING_MESSAGE, read_message, state_note
+from refill.reader import OPENING_MESSAGE, exact_reading, read_message, state_note
 from refill.render import (
     NO_PROGRESS_OUTCOMES,
     after_close_line,
@@ -16,6 +16,8 @@ from refill.render import (
 )
 from refill.steps import FINISHED_STATUSES, Step, allowed_tools, next_step
 from refill.tools import definitions_for, mentions_refill_details, run_tool
+
+LAST_EXCHANGE_MESSAGES = 3
 
 session_locks = defaultdict(asyncio.Lock)
 
@@ -35,6 +37,7 @@ class Turn:
     history: list
     note: str
     tools: list
+    exact: object = None
 
 
 def open_session(caller_phone, channel):
@@ -91,19 +94,22 @@ def record_first_audio(session_id, milliseconds):
         )
 
 
-def conversation_history(conn, session_id):
+def conversation_history(conn, session_id, last_exchange_only=False):
     rows = conn.execute("SELECT role, text FROM messages WHERE session_id = ? ORDER BY id", (session_id,))
     messages = [{"role": "assistant" if r["role"] == "agent" else "user", "content": r["text"]} for r in rows]
+    if last_exchange_only:
+        return messages[-LAST_EXCHANGE_MESSAGES:]
     return [{"role": "user", "content": OPENING_MESSAGE}, *messages]
 
 
-def load_turn(conn, session, just_verified=False):
+def load_turn(conn, session, text=None, just_verified=False):
     facts = load_facts(conn, session)
     return Turn(
         step=next_step(session).value,
-        history=conversation_history(conn, session["id"]),
+        history=conversation_history(conn, session["id"], bool(session["verified_at"]) and not just_verified),
         note=state_note(session, facts, just_verified),
         tools=definitions_for(allowed_tools(session)),
+        exact=exact_reading(session, facts, text) if text else None,
     )
 
 
@@ -115,7 +121,7 @@ def begin_turn(session_id, text):
             line = after_close_line(session, load_facts(conn, session))
             add_message(conn, session_id, session["channel"], "agent", line)
             return Reply(line, ends_conversation=True)
-        return load_turn(conn, session)
+        return load_turn(conn, session, text)
 
 
 def turn_after_verification(session_id):
@@ -123,8 +129,10 @@ def turn_after_verification(session_id):
         return load_turn(conn, load_session(conn, session_id), just_verified=True)
 
 
-def everything_the_patient_said(turn):
-    return " ".join(m["content"] for m in turn.history[1:] if m["role"] == "user")
+def everything_the_patient_said(session_id):
+    with transaction() as conn:
+        rows = conn.execute("SELECT text FROM messages WHERE session_id = ? AND role = 'patient'", (session_id,))
+        return " ".join(row["text"] for row in rows)
 
 
 def calls_to_run(reading):
@@ -140,6 +148,15 @@ def run_calls(session_id, calls, pending_step, patient_text):
     ]
 
 
+def rephrased_if_repeated(conn, session_id, text):
+    last_line = conn.execute(
+        "SELECT text FROM messages WHERE session_id = ? AND role = 'agent' ORDER BY id DESC LIMIT 1", (session_id,)
+    ).fetchone()
+    if last_line and last_line["text"].endswith(text):
+        return f"I still need this before I can go on. {text}"
+    return text
+
+
 def finish_turn(session_id, turn, text, calls, outcomes, error_code, llm_ms, started):
     made_progress = any(outcome.code not in NO_PROGRESS_OUTCOMES for outcome in outcomes)
     with transaction() as conn:
@@ -150,7 +167,8 @@ def finish_turn(session_id, turn, text, calls, outcomes, error_code, llm_ms, sta
         composed = compose_reply(session, load_facts(conn, session), outcomes, turn.note, text)
         if composed.asked_pending and next_step(session) is Step.CONFIRM:
             update_session(conn, session_id, price_stated_at=utc_now())
-        add_message(conn, session_id, session["channel"], "agent", composed.text)
+        reply_text = rephrased_if_repeated(conn, session_id, composed.text)
+        add_message(conn, session_id, session["channel"], "agent", reply_text)
         conn.execute(
             """
             INSERT INTO turn_log (session_id, step, tools, llm_ms, total_ms, error_code, created_at)
@@ -167,7 +185,7 @@ def finish_turn(session_id, turn, text, calls, outcomes, error_code, llm_ms, sta
             ),
         )
     return Reply(
-        composed.text,
+        reply_text,
         step=next_step(session),
         ends_conversation=session["status"] != "active",
         holding=composed.holding,
@@ -181,10 +199,10 @@ async def handle_turn(session_id, text):
         turn = await asyncio.to_thread(begin_turn, session_id, text)
         if isinstance(turn, Reply):
             return turn
-        reading = await read_message(turn.history, turn.note, turn.tools)
+        reading = turn.exact or await read_message(turn.history, turn.note, turn.tools)
         calls = calls_to_run(reading)
         outcomes = await asyncio.to_thread(run_calls, session_id, calls, Step(turn.step), text)
-        patient_text = everything_the_patient_said(turn)
+        patient_text = everything_the_patient_said(session_id)
         if any(outcome.code == "verified" for outcome in outcomes) and mentions_refill_details(session_id, patient_text):
             follow_up = await asyncio.to_thread(turn_after_verification, session_id)
             second_reading = await read_message(follow_up.history, follow_up.note, follow_up.tools)

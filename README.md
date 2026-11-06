@@ -2,7 +2,7 @@
 
 A voice agent that takes prescription refill requests over a (simulated) phone call and continues over (simulated) SMS if the call drops. The problem statement is in [docs/TAKE_HOME.md](docs/TAKE_HOME.md), kickoff clarifications in [docs/KICKOFF_NOTES.md](docs/KICKOFF_NOTES.md), and design decisions in [docs/DECISIONS.md](docs/DECISIONS.md).
 
-Status: the text loop and the voice call both work. The SMS fallback and latency work are next.
+Status: the text loop and the voice call both work, tuned on real calls. The SMS fallback is next.
 
 ## Setup
 
@@ -62,7 +62,13 @@ uv run python -m tests.voice_call --script happy --calls 5
 uv run python -m tests.voice_call --script price_cut_off
 ```
 
-The other scripts are `barge_in` and `acknowledgement`. Synthetic speech can make turn detection behave differently from a real voice, so treat these timings as a guide.
+The other scripts are `barge_in`, `acknowledgement`, `declines_pharmacy` and `first_name_only`. Synthetic speech can make turn detection behave differently from a real voice, so treat these timings as a guide.
+
+To refit the turn model from labelled real calls and compare policies on held-out calls:
+
+```bash
+uv run python -m tests.fit_turn_model
+```
 
 ## Layout
 
@@ -74,6 +80,7 @@ The other scripts are `barge_in` and `acknowledgement`. Synthetic speech can mak
 | `refill/reader.py` | The one LLM call that reads a message |
 | `refill/render.py` | Every line the agent says, in spoken and written form |
 | `refill/guard.py` | The check on free text from the model |
+| `refill/turn_model.py` | The Bayesian decision on how long to wait before replying |
 | `refill/voice.py` | The Pipecat pipeline, and the bridge between it and the core |
 | `refill/server.py`, `refill/web/index.html` | The local server and the call page |
 | `refill/schema.sql`, `refill/seed.sql` | Tables and demo data |

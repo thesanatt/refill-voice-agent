@@ -37,7 +37,7 @@ def allowed_tools(session):
         return always
     if not session["verified_at"]:
         return always | {"verify_identity"}
-    field_tools = {"select_medication", "confirm_pharmacy", "confirm_insurance"}
+    field_tools = {"select_medication", "confirm_pharmacy", "confirm_insurance", "change_answer"}
     if next_step(session) is Step.CONFIRM and session["price_stated_at"]:
         return always | field_tools | {"submit_request"}
     return always | field_tools

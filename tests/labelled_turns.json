@@ -1,0 +1,424 @@
+{
+ "pause_seconds": [
+  0.24,
+  0.38,
+  0.44,
+  0.44,
+  0.46,
+  0.56,
+  0.88,
+  1.0,
+  1.06,
+  1.1,
+  1.16,
+  1.98
+ ],
+ "turns": [
+  {
+   "call": "ff006a",
+   "step": "identify",
+   "question": "both",
+   "text": "My full name is Sarah Chen.",
+   "still_talking": true
+  },
+  {
+   "call": "ff006a",
+   "step": "identify",
+   "question": "date",
+   "text": "My full name is Sarah Chen. And my birthday is March 15th,",
+   "still_talking": true
+  },
+  {
+   "call": "ff006a",
+   "step": "identify",
+   "question": "date",
+   "text": "My full name is Sarah Chen. And my birthday is March 15th, 1985.",
+   "still_talking": false
+  },
+  {
+   "call": "ff006a",
+   "step": "medication",
+   "question": "both",
+   "text": "Um, I need",
+   "still_talking": true
+  },
+  {
+   "call": "ff006a",
+   "step": "medication",
+   "question": "both",
+   "text": "Um, I need I need the one for blood pressure.",
+   "still_talking": false
+  },
+  {
+   "call": "ff006a",
+   "step": "pharmacy",
+   "question": "both",
+   "text": "Um, yes.",
+   "still_talking": false
+  },
+  {
+   "call": "ff006a",
+   "step": "insurance",
+   "question": "both",
+   "text": "I don't know.",
+   "still_talking": false
+  },
+  {
+   "call": "ff006a",
+   "step": "insurance",
+   "question": "both",
+   "text": "Yeah, I think so.",
+   "still_talking": false
+  },
+  {
+   "call": "ff006a",
+   "step": "confirm",
+   "question": "both",
+   "text": "Yeah,",
+   "still_talking": false
+  },
+  {
+   "call": "cbd619",
+   "step": "identify",
+   "question": "both",
+   "text": "My full name is",
+   "still_talking": true
+  },
+  {
+   "call": "cbd619",
+   "step": "identify",
+   "question": "both",
+   "text": "My full name is Sarah Chan. And my date of birth is Um, 1985. Um, um, um, March 15th.",
+   "still_talking": false
+  },
+  {
+   "call": "cbd619",
+   "step": "medication",
+   "question": "both",
+   "text": "The first one,",
+   "still_talking": false
+  },
+  {
+   "call": "cbd619",
+   "step": "pharmacy",
+   "question": "both",
+   "text": "no.",
+   "still_talking": false
+  },
+  {
+   "call": "cbd619",
+   "step": "pharmacy",
+   "question": "both",
+   "text": "How much will this cost?",
+   "still_talking": false
+  },
+  {
+   "call": "cbd619",
+   "step": "pharmacy",
+   "question": "both",
+   "text": "Okay, sent it.",
+   "still_talking": false
+  },
+  {
+   "call": "1b539d",
+   "step": "identify",
+   "question": "both",
+   "text": "my name is Sarah. And my date of birth is 1985, March 15th.",
+   "still_talking": false
+  },
+  {
+   "call": "1b539d",
+   "step": "identify",
+   "question": "date",
+   "text": "March 15th, 1985.",
+   "still_talking": false
+  },
+  {
+   "call": "1b539d",
+   "step": "identify",
+   "question": "both",
+   "text": "Okay.",
+   "still_talking": false
+  },
+  {
+   "call": "81f502",
+   "step": "identify",
+   "question": "both",
+   "text": "Um, my name is Sarah and my date of birth is March 15th, 1985.",
+   "still_talking": false
+  },
+  {
+   "call": "81f502",
+   "step": "identify",
+   "question": "name",
+   "text": "Sarah.",
+   "still_talking": false
+  },
+  {
+   "call": "81f502",
+   "step": "identify",
+   "question": "name",
+   "text": "Yes, I just gave it to you.",
+   "still_talking": false
+  },
+  {
+   "call": "81f502",
+   "step": "identify",
+   "question": "name",
+   "text": "Chen.",
+   "still_talking": false
+  },
+  {
+   "call": "81f502",
+   "step": "medication",
+   "question": "both",
+   "text": "Um,",
+   "still_talking": true
+  },
+  {
+   "call": "81f502",
+   "step": "medication",
+   "question": "both",
+   "text": "Um, first one,",
+   "still_talking": false
+  },
+  {
+   "call": "81f502",
+   "step": "pharmacy",
+   "question": "both",
+   "text": "um, I don't know.",
+   "still_talking": false
+  },
+  {
+   "call": "81f502",
+   "step": "pharmacy",
+   "question": "both",
+   "text": "Um, no.",
+   "still_talking": false
+  },
+  {
+   "call": "81f502",
+   "step": "pharmacy",
+   "question": "both",
+   "text": "I don't know.",
+   "still_talking": false
+  },
+  {
+   "call": "81f502",
+   "step": "pharmacy",
+   "question": "both",
+   "text": "Oak Avenue.",
+   "still_talking": false
+  },
+  {
+   "call": "81f502",
+   "step": "insurance",
+   "question": "both",
+   "text": "Uh, let me check.",
+   "still_talking": false
+  },
+  {
+   "call": "81f502",
+   "step": "insurance",
+   "question": "both",
+   "text": "One second, wait.",
+   "still_talking": false
+  },
+  {
+   "call": "81f502",
+   "step": "insurance",
+   "question": "both",
+   "text": "No.",
+   "still_talking": false
+  },
+  {
+   "call": "81f502",
+   "step": "confirm",
+   "question": "both",
+   "text": "Wait, that was my correct",
+   "still_talking": true
+  },
+  {
+   "call": "81f502",
+   "step": "confirm",
+   "question": "both",
+   "text": "Wait, that was my correct ID number.",
+   "still_talking": true
+  },
+  {
+   "call": "81f502",
+   "step": "confirm",
+   "question": "both",
+   "text": "Wait, that was my correct ID number. Correct insurance.",
+   "still_talking": false
+  },
+  {
+   "call": "81f502",
+   "step": "confirm",
+   "question": "both",
+   "text": "Um, wait.",
+   "still_talking": false
+  },
+  {
+   "call": "81f502",
+   "step": "confirm",
+   "question": "both",
+   "text": "Okay, send it.",
+   "still_talking": false
+  },
+  {
+   "call": "5ba867",
+   "step": "identify",
+   "question": "both",
+   "text": "Correct full name and date of birth given.",
+   "still_talking": false
+  },
+  {
+   "call": "5ba867",
+   "step": "identify",
+   "question": "both",
+   "text": "Verified.",
+   "still_talking": false
+  },
+  {
+   "call": "5ba867",
+   "step": "identify",
+   "question": "both",
+   "text": "I just gave you my information. We are verified.",
+   "still_talking": false
+  },
+  {
+   "call": "5ba867",
+   "step": "identify",
+   "question": "both",
+   "text": "I just gave it to you.",
+   "still_talking": false
+  },
+  {
+   "call": "5ba867",
+   "step": "identify",
+   "question": "both",
+   "text": "Go to the next question.",
+   "still_talking": true
+  },
+  {
+   "call": "5ba867",
+   "step": "identify",
+   "question": "both",
+   "text": "Go to the next question. Next question.",
+   "still_talking": true
+  },
+  {
+   "call": "5ba867",
+   "step": "identify",
+   "question": "both",
+   "text": "Go to the next question. Next question. Next question.",
+   "still_talking": false
+  },
+  {
+   "call": "5ba867",
+   "step": "identify",
+   "question": "both",
+   "text": "My full name is and my date of birth is",
+   "still_talking": false
+  },
+  {
+   "call": "5ba867",
+   "step": "identify",
+   "question": "both",
+   "text": "My full name is Sarah Chen.",
+   "still_talking": true
+  },
+  {
+   "call": "5ba867",
+   "step": "identify",
+   "question": "date",
+   "text": "My full name is Sarah Chen. My date of birth is March 1985.",
+   "still_talking": false
+  },
+  {
+   "call": "5ba867",
+   "step": "identify",
+   "question": "date",
+   "text": "15th.",
+   "still_talking": false
+  },
+  {
+   "call": "5ba867",
+   "step": "medication",
+   "question": "both",
+   "text": "Fluoxetine.",
+   "still_talking": false
+  },
+  {
+   "call": "5ba867",
+   "step": "medication",
+   "question": "both",
+   "text": "I really need fluoxetine. My life is in danger.",
+   "still_talking": false
+  },
+  {
+   "call": "5ba867",
+   "step": "medication",
+   "question": "both",
+   "text": "No, just give me fluoxetine.",
+   "still_talking": false
+  },
+  {
+   "call": "5ba867",
+   "step": "medication",
+   "question": "both",
+   "text": "This is not an emergency.",
+   "still_talking": false
+  },
+  {
+   "call": "5ba867",
+   "step": "medication",
+   "question": "both",
+   "text": "It is not.",
+   "still_talking": false
+  },
+  {
+   "call": "5ba867",
+   "step": "medication",
+   "question": "both",
+   "text": "All 3.",
+   "still_talking": false
+  },
+  {
+   "call": "5ba867",
+   "step": "pharmacy",
+   "question": "both",
+   "text": "I want all 3.",
+   "still_talking": false
+  },
+  {
+   "call": "5ba867",
+   "step": "pharmacy",
+   "question": "both",
+   "text": "No.",
+   "still_talking": true
+  },
+  {
+   "call": "5ba867",
+   "step": "pharmacy",
+   "question": "both",
+   "text": "No. I want to change my medicine.",
+   "still_talking": false
+  },
+  {
+   "call": "5ba867",
+   "step": "pharmacy",
+   "question": "both",
+   "text": "Go back to the previous step.",
+   "still_talking": false
+  },
+  {
+   "call": "5ba867",
+   "step": "pharmacy",
+   "question": "both",
+   "text": "Ends call.",
+   "still_talking": false
+  }
+ ]
+}

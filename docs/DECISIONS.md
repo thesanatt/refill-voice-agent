@@ -12,7 +12,7 @@ Format:
 
 ## D1. Flow control: a plain code module owns the steps (2026-11-05)
 - Options: (A) one prompt with all tools; (B) a plain code module that derives the step from stored fields, with the LLM reading replies; (C) a Pipecat Flows graph or a fully scripted dialogue.
-- Chosen: B. The current step is the first required field still empty, never a stored pointer. One core, `handle_turn(session, channel, text)`, serves voice and SMS and imports nothing from the voice layer. The LLM reads the patient's reply and calls tools. Code renders every sentence holding a drug, pharmacy, plan or price, so a normal turn needs one LLM pass. Eight tools: `verify_identity`, `select_medication`, `confirm_pharmacy`, `confirm_insurance`, `submit_request`, `request_pharmacist`, `end_call`, `respond`. Every turn is a forced tool call, and free answers go through `respond`. Tools are gated on prerequisites rather than on the current step. Before verification only `verify_identity`, `request_pharmacist`, `end_call` and `respond` exist. After it every field tool exists, so an early answer is captured. `submit_request` also needs every field filled and the price already stated.
+- Chosen: B. The current step is the first required field still empty, never a stored pointer. One core, `handle_turn(session, channel, text)`, serves voice and SMS and imports nothing from the voice layer. The LLM reads the patient's reply and calls tools. Code renders every sentence holding a drug, pharmacy, plan or price, so a normal turn needs one LLM pass. Nine tools: `verify_identity`, `select_medication`, `confirm_pharmacy`, `confirm_insurance`, `change_answer`, `submit_request`, `request_pharmacist`, `end_call`, `respond`. Every turn is a forced tool call, and free answers go through `respond`. Tools are gated on prerequisites rather than on the current step. Before verification only `verify_identity`, `request_pharmacist`, `end_call` and `respond` exist. After it every field tool exists, so an early answer is captured. `submit_request` also needs every field filled and the price already stated.
 - Why: On text agents in 2026, one controlled study went from 0.38 with raw state to 0.98 with hard enforcement. Those tasks are harder than this one and are not voice, so the shape transfers and the number does not. Flows keeps state in a process dictionary and needs a voice pipeline, which the SMS path does not have. Gating on the current step alone would lose a pharmacy named early. Forcing the tool call was measured on 2026-11-06 with Haiku 5.5, 24 calls per mode in one run from a home connection: a finished call took 827 ms median against 1,186 ms with automatic tool choice, because automatic mode wrote a preamble in 18 of 24 calls and skipped the tool once. It also means a tool call can never be spoken as plain text.
 - Revisit if: off-script handling becomes the main extension and code routing feels brittle, or the model moves to Sonnet 5.5, which rejects forced tool choice.
 
@@ -36,8 +36,8 @@ Format:
 
 ## D5. Working phrases on slow turns (2026-11-05)
 - Options: (A) no filler; (B) short working phrases on a timer; (C) hesitation sounds such as "uhh" and "umm".
-- Chosen: B. Pre-recorded clips in the agent's voice, such as "Let me check that" and "One moment", holding no facts. A clip plays only if no reply is ready about 0.3 s after the turn ends, so fast turns have none. At most about three per call, never the same one twice running, and never while a date of birth is incomplete. Clips can be interrupted and stay out of the conversation context. First sound and first real content are logged separately, and the latency figure uses first content.
-- Why: it covers an LLM wait without hiding it from the measurement. Hesitation sounds may signal doubt just before a price, and the evidence on them is mixed. Speed and accuracy stay the priority, so this stays light. The 0.3 s is a planning number.
+- Chosen: B. Short lines in the agent's voice, such as "Let me check that" and "One moment", holding no facts. A line plays only if no reply is ready 1.5 s after the turn ends, so normal turns have none. At most about three per call, never the same one twice running, and never while a date of birth is incomplete. Clips can be interrupted and stay out of the conversation context. First sound and first real content are logged separately, and the latency figure uses first content.
+- Why: it covers a slow LLM reply without hiding it from the measurement. Hesitation sounds may signal doubt just before a price, and the evidence on them is mixed. A first setting of 1.0 s sat at the LLM's median, so the phrase fired on nearly every LLM turn and delayed the real answer behind it. 1.5 s keeps it for slow turns.
 - Revisit if: clips sound repetitive, or timing shows they are rarely needed.
 
 ## D6. Edge cases and guardrails (2026-11-05)
@@ -68,7 +68,7 @@ Format:
 | "Why do you need that?" | Fixed line, then the pending question. |
 | "Are you a real person?" | A truthful fixed line saying it is an automated assistant. |
 | Dose advice, side effects, interactions, symptoms | No advice. `request_pharmacist`, then offer to continue the refill. |
-| Emergency language | A fixed line telling them to call 911. |
+| Emergency language | A fixed line telling them to call 911, said once per call. |
 | Two questions at once | Answer what is on record, then ask one question back. |
 | Anything else | Say it cannot help with that, offer a pharmacist, then the pending question. |
 
@@ -81,9 +81,9 @@ Format:
 | A detail given before verification ("refill my lisinopril") | Not stored as collected. It stays in the conversation and is applied after verification, so the patient is not asked again. Code spots the drug, purpose or topic in the patient's words, and one extra LLM pass reads them on that turn only. |
 | Name and date together or reversed | Accepted. |
 | Self-correction in one turn ("CVS, no, Walgreens") | The last stated value wins. |
-| Change of mind before the final yes | The field is overwritten, the step recomputes, and the copay is looked up again when spoken. |
+| Change of mind before the final yes | The field is overwritten, the step recomputes, and the copay is looked up again when spoken. "Change my medicine" or "go back" with no new value clears that answer through `change_answer`. |
 | An incomplete date ("March...") | Not a failed attempt. The agent waits or asks for the missing part. |
-| Two refills at once | The agent asks which one first. A second refill is a listed extension. |
+| Several refills at once ("all 3", "both", two drug names) | Code catches this: the agent does one refill at a time and asks which first. A second refill is a listed extension. |
 
 ### Protecting data
 
@@ -109,7 +109,7 @@ Format:
 | "What?" or "Can you repeat that?" | The last line is rendered again from state. |
 | "Hold on" | The agent waits quietly for up to about 30 s. |
 | Silence | A gentle re-ask at about 10 s and "Take your time" at about 20 s. Whether long silence ends the call is left to Q5. |
-| Background talk or unclear speech | "Sorry, I didn't catch that", then a rephrased question. After two misses it offers a pharmacist. |
+| Background talk or unclear speech | "Sorry, I didn't catch that", then the question again. After two misses it offers a pharmacist, and an identical line is rephrased rather than repeated. |
 | "I have to go" or "text me instead" | `end_call`: the agent says it will text, then the SMS path runs. |
 | A drug not on the list | "I don't see that one on your list", then the list again and an offer of a pharmacist. |
 | A different pharmacy not in the table | Stored as patient text, read back and flagged for staff. |
@@ -128,7 +128,7 @@ Documented but not built: a patient calling back during an open SMS thread, seve
 
 ## D7. Take-home scope and targets (2026-11-05)
 - Options: (A) build to production rules; (B) build the core and name production needs in the walkthrough.
-- Chosen: B. Left out: opt-out word matching, the 160-character text limit, session expiry, the transcription notice and vendor agreements. Kept because they are cheap: tools refusing before verification, no drug name in a text before verification, and saying the agent is AI in the greeting. The date of birth retry follows the kickoff notes. First texts ask the next question directly and may state the copay. The fast deterministic reader is deferred until timings exist. The target stays "under about 1 second", now measured from the true end of speech at the microphone to the first audible agent audio, reported by turn class, and the number changes only after real timings.
+- Chosen: B. Left out: opt-out word matching, the 160-character text limit, session expiry, the transcription notice and vendor agreements. Kept because they are cheap: tools refusing before verification, no drug name in a text before verification, and saying the agent is AI in the greeting. The date of birth retry follows the kickoff notes. First texts ask the next question directly and may state the copay. The target stays "under about 1 second", now measured from the true end of speech at the microphone to the first audible agent audio, reported by turn class, and the number changes only after real timings.
 - Why: this is a take-home that will not ship. Latency estimates put a turn where the LLM reads the reply near 1.4 s at the median, so the honest move is to measure before touching the target.
 - Revisit if: real telephony or real SMS is added.
 
@@ -150,7 +150,7 @@ Documented but not built: a patient calling back during an open SMS thread, seve
 - Why: AssemblyAI allows mid-stream keyterm and turn changes. Haiku 5.5 measured about 840 ms median to a finished tool call on this project, and forced tool calls are not available on Sonnet 5.5. Inworld had the lowest independent first-audio figure among the shortlist, with inline pronunciation control. Most vendor figures are unverified here, so these are first picks, not conclusions.
 - Revisit if: drug names or dates transcribe poorly, or first audio is slow on real calls.
 
-## D11. Turn detection: Smart Turn with step-aware limits (2026-11-06)
+## D11. Turn detection: Smart Turn with step-aware limits (2026-11-06, replaced by D15)
 - Options: (A) Smart Turn with VAD, plus step-aware rules; (B) provider turn detection tuned mid-stream; (C) a plain silence timer.
 - Chosen: A. The core tells the turn layer the pending step. The fallback for a missed end of turn is 3.0 s at the date of birth, 1.0 s at the medication step and 0.6 s at yes/no steps. Barge-in stays on for every line, with a small list of acknowledgement words that do not interrupt unless the line is about to end, when they may be a real answer.
 - Why: it starts with no vendor dependency and runs in milliseconds locally. A silence timer scored far lower in the one comparison found, and dates of birth contain long pauses.
@@ -173,6 +173,24 @@ Documented but not built: a patient calling back during an open SMS thread, seve
 - Chosen: A.
 - Why: a reviewer sees the hang-up and the text arrive without switching windows.
 - Revisit if: real telephony is added.
+
+## D15. Turn-taking: a slot-aware Bayesian decision replaces Smart Turn (2026-11-06)
+- Options: (A) keep Smart Turn with step limits (D11); (B) one fixed silence limit; (C) decide from what the pending question needs, with silence weighed by how real pauses end.
+- Chosen: C, in `refill/turn_model.py`. The words so far are classed as answered, hanging or open for the pending question. That sets the odds the patient is still talking, and those odds fall with silence at the rate a log-normal pause model predicts. The agent replies once the cut-off risk drops below 10%, or 5% at identity. In practice "answered" adds no wait, "open" about 0.5 s and "hanging" about 1.6 to 2.0 s. Smart Turn is no longer used. This follows the cost-based approach of Raux and Eskenazi (2009).
+- Why: on real calls Smart Turn added no measurable information: it said complete 21 of 33 times when the patient had finished and 4 of 5 when they had not, a likelihood ratio of 0.88, with wide intervals. It sent 11 of 35 turns to the silence fallback and let fragments like "Um," end a turn. The agent already knows what it asked, and audio alone does not. Scored on held-out calls, this halves the mean wait (1.54 s to 0.77 s) and cuts the 90th percentile from 3.0 s to 0.92 s, at about the same expected cut-offs (2.3 to 2.6 of 11). The data is small: 58 turns, 11 still talking and 12 pauses from one speaker, so priors matter and the constants are a starting point. `tests/fit_turn_model.py` refits them.
+- Revisit if: more human calls are collected, especially older or slower speakers, or a different speaker shows a different pause pattern.
+
+## D16. Exact answers skip the LLM (2026-11-06)
+- Options: (A) the LLM reads every turn; (B) code reads a short list of exact answers and the LLM reads the rest; (C) speculative LLM reads on partial transcripts.
+- Chosen: B. A bare yes or no at a yes/no step, or an exact drug name at the medication step, goes straight to the same tool layer with the same gates. Requests for several refills, or about someone else's records, are also handled here. Anything else goes to the LLM. Timing is why D7 deferred this, and timings now exist.
+- Why: the LLM read is the largest stage at about 0.9 s, and it is the only route found to under 1 s. On replayed human speech these turns reached first audio in about 0.65 to 0.9 s. C could save perhaps 0.25 s on the rest and is the next lever, at more complexity.
+- Revisit if: a reviewer wants every turn to go through the model.
+
+## D17. What the model sees and how many tools it may call (2026-11-06)
+- Options: (A) full history, several tools per turn; (B) full history, one tool per turn; (C) only the last exchange after verification, several tools per turn.
+- Chosen: C. Identity turns keep the whole conversation, and the extra read after verification does too.
+- Why: the model re-recorded old answers it could see, which took output from about 42 to about 150 tokens and added about 0.6 s. B looked better on speed and call counts, but failed on correctness: the model re-recorded first and stopped, so "no, don't send it" failed 3 of 3 runs. C removes the cause, and typed tests showed no loss of accuracy.
+- Revisit if: a real call shows the model losing a reference to something said two turns earlier.
 
 ## Open questions
 

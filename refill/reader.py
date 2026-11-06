@@ -1,3 +1,6 @@
+import asyncio
+import re
+import string
 from dataclasses import dataclass
 
 import anthropic
@@ -52,13 +55,16 @@ not listed. If the patient says no without naming a pharmacy, pass null for both
 - submit_request: only when the patient says yes to sending the request.
 - request_pharmacist: use clinical_question for dose advice, side effects, interactions or symptoms, \
 asked_for_person when they ask for a person or pharmacist, and urgent for emergency language such as chest pain, \
-trouble breathing, overdose or self-harm.
+trouble breathing, overdose or self-harm. Never use urgent if the patient says it is not an emergency.
+- change_answer: for "I want to change my medicine", "wrong one", or "go back", when the new value is not given. \
+Use the field named, or previous for "go back".
 - end_call: use patient_leaving for "I have to go" or "text me instead", and declined for "no" to sending the \
 request, "never mind", or "no" to a pharmacist calling back.
 
 respond, for everything else:
 - kind "repeat" when the patient asks you to say something again, or to hear a price or detail again.
 - kind "hold" only when the patient asks you to wait, such as "hold on" or "one second".
+- kind "repeat" also when the caller claims to have answered already but gives nothing new.
 - kind "unsure" when the patient says they don't know or aren't sure about the pending question.
 - kind "unclear" for background talk or anything you cannot understand.
 - kind "answer" with text, only when the patient asked a question. Write one short plain statement, with no \
@@ -67,6 +73,30 @@ are on record, so answer those from the latest system note.
 
 Fixed answers, to be used word for word:
 """ + "\n".join(f'- {situation}: "{answer}"' for situation, answer in FIXED_ANSWERS.items())
+
+FILLERS = re.compile(r"\b(um+|uh+|er+|ah+|hmm+)\b", re.IGNORECASE)
+PUNCTUATION = str.maketrans("", "", string.punctuation.replace("'", ""))
+SOMEONE_ELSE = re.compile(
+    r"\bmy (?:husband|wife|spouse|partner|son|daughter|mom|mother|dad|father|brother|sister|friend|neighbor)\b"
+    r".*\b(prescription|medication|medicine|record|refill|pharmacy|insurance)",
+    re.IGNORECASE,
+)
+SEVERAL_REFILLS = re.compile(r"\b(all (?:of them|three|3)|both)\b", re.IGNORECASE)
+EXACT_YES = {
+    "yes", "yeah", "yep", "yup", "yes please", "yeah please", "correct", "thats right", "that's right", "sure", "ok",
+    "okay", "yes it is", "go ahead", "send it", "yes send it", "okay send it", "please do", "sounds good",
+}  # fmt: skip
+EXACT_NO = {"no", "nope", "no thanks", "no thank you"}
+EXACT_CALLS = {
+    (Step.PHARMACY, "yes"): lambda facts: (
+        "confirm_pharmacy", {"pharmacy_id": facts.pharmacy_on_file["id"], "other_pharmacy": None}
+    ),
+    (Step.PHARMACY, "no"): lambda facts: ("confirm_pharmacy", {"pharmacy_id": None, "other_pharmacy": None}),
+    (Step.INSURANCE, "yes"): lambda facts: ("confirm_insurance", {"status": "current"}),
+    (Step.INSURANCE, "no"): lambda facts: ("confirm_insurance", {"status": "changed"}),
+    (Step.CONFIRM, "yes"): lambda facts: ("submit_request", {}),
+    (Step.CONFIRM, "no"): lambda facts: ("end_call", {"reason": "declined"}),
+}
 
 client = anthropic.AsyncAnthropic(timeout=LLM_TIMEOUT_SECONDS, max_retries=1)
 
@@ -124,17 +154,57 @@ def state_note(session, facts, just_verified=False):
     return "\n".join(lines)
 
 
+def request_settings(tools):
+    return {
+        "model": MODEL,
+        "thinking": {"type": "disabled"},
+        "output_config": {"effort": "low"},
+        "system": [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+        "tools": tools,
+    }
+
+
+async def warm_up(tool_lists):
+    opening = [{"role": "user", "content": OPENING_MESSAGE}]
+    await asyncio.gather(
+        *(client.messages.create(max_tokens=0, messages=opening, **request_settings(tools)) for tools in tool_lists),
+        return_exceptions=True,
+    )
+
+
+def spoken_words(text):
+    return FILLERS.sub(" ", text.lower()).translate(PUNCTUATION).split()
+
+
+def exact_reading(session, facts, text):
+    """Handle the few answers that need no interpretation, using the same tools the model would call."""
+    if not session["verified_at"]:
+        return None
+    if SOMEONE_ELSE.search(text):
+        refusal = FIXED_ANSWERS["Anyone else's records, or another patient"]
+        return Reading(calls=(ToolCall("respond", {"kind": "answer", "text": refusal}),))
+    if SEVERAL_REFILLS.search(text) or sum(p["medication"].lower() in text.lower() for p in facts.prescriptions) >= 2:
+        return Reading(calls=(ToolCall("respond", {"kind": "one_at_a_time", "text": None}),))
+    words = " ".join(spoken_words(text))
+    step = next_step(session)
+    if step is Step.MEDICATION:
+        chosen = next((p for p in facts.prescriptions if p["medication"].lower() == words), None)
+        return Reading(calls=(ToolCall("select_medication", {"prescription_id": chosen["id"]}),)) if chosen else None
+    answer = "yes" if words in EXACT_YES else "no" if words in EXACT_NO else None
+    call = EXACT_CALLS.get((step, answer))
+    if call is None:
+        return None
+    name, arguments = call(facts)
+    return Reading(calls=(ToolCall(name, arguments),))
+
+
 async def read_message(history, note, tools):
     try:
         response = await client.messages.create(
-            model=MODEL,
             max_tokens=MAX_OUTPUT_TOKENS,
-            thinking={"type": "disabled"},
-            output_config={"effort": "low"},
-            system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-            tools=tools,
             tool_choice={"type": "any"},
             messages=[*history, {"role": "system", "content": note}],
+            **request_settings(tools),
         )
     except anthropic.AuthenticationError:
         raise

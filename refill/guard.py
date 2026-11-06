@@ -11,7 +11,11 @@ FIXED_ANSWERS = {
 }
 SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
 QUESTION = re.compile(
-    r"^\W*(is|are|was|does|do|did|what|which|how|why|when|where|who|can|could|will|would)\b", re.IGNORECASE
+    r"^\W*(is|are|was|does|do|did|what|which|how|why|when|where|who|can|could|will|would|tell|give|show|read)\b",
+    re.IGNORECASE,
+)
+UNSURE = re.compile(
+    r"(don'?t|do not|didn'?t) (know|remember|recall)|not sure|unsure|no idea|can'?t remember", re.IGNORECASE
 )
 MONEY = re.compile(r"\$|\b(?:dollars?|cents?)\b", re.IGNORECASE)
 NUMBER = re.compile(r"\d+")

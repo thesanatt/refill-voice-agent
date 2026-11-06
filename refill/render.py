@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from refill.guard import safe_answer
+from refill.guard import UNSURE, safe_answer
 from refill.steps import Step, identity_locked, next_step
 
 AGENT_NAME = "Demo Pharmacy"
@@ -14,7 +14,7 @@ NO_PROGRESS_OUTCOMES = {"unclear", "refused", "unchanged", "repeat", "unsure"}
 ACKNOWLEDGEMENT = "Great."
 IDENTITY_FOLLOW_UPS = {
     "missing_name": "And your full name?",
-    "first_name_only": "Can I get your first and last name?",
+    "first_name_only": "And your last name?",
     "missing_date": "And your date of birth?",
     "invalid_date": "That date didn't sound right. Can you say your date of birth again?",
 }
@@ -192,6 +192,10 @@ def lead_for(outcome, session, facts):
             return "No problem, the pharmacy can check that."
         case "unsure":
             return "That's okay."
+        case "answer_cleared":
+            return "No problem."
+        case "one_at_a_time":
+            return "I can do one refill at a time, so let's start with one."
         case "identity_mismatch":
             return "I couldn't match that."
         case "clinical_question":
@@ -248,7 +252,7 @@ def compose_reply(session, facts, outcomes, known_facts, patient_text):
     if len(lines) > 1 and ACKNOWLEDGEMENT in lines:
         lines.remove(ACKNOWLEDGEMENT)
     if not lines and "repeat" not in codes and all(code in NO_PROGRESS_OUTCOMES for code in codes):
-        lines.append("Sorry, I didn't catch that.")
+        lines.append("That's okay." if UNSURE.search(patient_text) else "Sorry, I didn't catch that.")
     lines.append(pending_question(session, facts))
     if session["unclear_turns"] >= 2:
         lines.append("You can also ask for a pharmacist.")
