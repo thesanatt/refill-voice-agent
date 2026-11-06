@@ -2,6 +2,8 @@ import asyncio
 import os
 import re
 import time
+import wave
+from pathlib import Path
 
 from dotenv import load_dotenv
 from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
@@ -27,6 +29,7 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregator, LLMUserAggregatorParams
+from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.assemblyai.stt import AssemblyAISTTService
 from pipecat.services.inworld.tts import InworldTTSService
@@ -50,6 +53,7 @@ from refill.steps import Step
 load_dotenv()
 
 DEMO_CALLER_PHONE = "(555) 867-5309"
+RECORDINGS_DIR = Path(__file__).parent.parent / "recordings"
 STT_MODEL = "universal-3-6-pro"
 TTS_MODEL = "inworld-tts-2"
 TTS_VOICE = "Ashley"
@@ -66,6 +70,15 @@ ACKNOWLEDGEMENTS = {"mm hm", "mm hmm", "mhm", "mm", "hmm", "uh huh", "okay", "ok
 
 def normalized_speech(text):
     return re.sub(r"[^a-z ]", "", text.lower().replace("-", " ")).strip()
+
+
+def save_recording(session_id, audio, sample_rate, num_channels):
+    RECORDINGS_DIR.mkdir(exist_ok=True)
+    with wave.open(str(RECORDINGS_DIR / f"{session_id}.wav"), "wb") as recording:
+        recording.setnchannels(num_channels)
+        recording.setsampwidth(2)
+        recording.setframerate(sample_rate)
+        recording.writeframes(audio)
 
 
 class StepAwareSmartTurn(LocalSmartTurnAnalyzerV3):
@@ -242,9 +255,10 @@ async def run_call(connection):
         ),
     )
     bridge = CallBridge(session_id, smart_turn, start_strategy)
+    recorder = AudioBufferProcessor(num_channels=2)
     latency = UserBotLatencyObserver()
     task = PipelineTask(
-        Pipeline([transport.input(), stt, user_turns, bridge, tts, transport.output()]),
+        Pipeline([transport.input(), stt, user_turns, bridge, tts, transport.output(), recorder]),
         params=PipelineParams(enable_metrics=True),
         observers=[latency],
     )
@@ -258,12 +272,18 @@ async def run_call(connection):
     async def on_user_turn_idle(_aggregator):
         await bridge.handle_idle()
 
+    @recorder.event_handler("on_audio_data")
+    async def on_audio_data(_recorder, audio, sample_rate, num_channels):
+        await asyncio.to_thread(save_recording, session_id, audio, sample_rate, num_channels)
+
     @transport.event_handler("on_client_connected")
     async def on_client_connected(_transport, _client):
+        await recorder.start_recording()
         await bridge.greet(greeting)
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(_transport, _client):
+        await recorder.stop_recording()
         await asyncio.to_thread(drop_session, session_id)
         await task.cancel()
 

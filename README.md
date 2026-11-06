@@ -32,6 +32,8 @@ uv run python -m refill.server
 
 Open http://127.0.0.1:7860 in Chrome, allow the microphone and press Start call. The demo patient is Sarah Chen, born March 15, 1985.
 
+Each call is saved to `recordings/<session id>.wav`, which git ignores. The patient is on the left channel and the agent on the right.
+
 ## Run the text loop
 
 ```bash
