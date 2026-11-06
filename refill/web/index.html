@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Refill Line</title>
+<style>
+  :root { --ink: #1c1a17; --muted: #6b655c; --paper: #fbfaf7; --line: #ddd8cf; --accent: #0f6b57; --stop: #a3341f; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.5 Georgia, "Times New Roman", serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 32px 16px; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  #status { color: var(--muted); margin: 0 0 20px; font-family: system-ui, sans-serif; font-size: .9rem; }
+  button { font: 600 1rem system-ui, sans-serif; padding: 10px 18px; border: 0; border-radius: 4px; color: #fff; background: var(--accent); cursor: pointer; }
+  button.stop { background: var(--stop); }
+  button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  #log { margin: 24px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+  #log li { padding: 10px 0; border-bottom: 1px solid var(--line); }
+  #log b { display: block; font: 600 .75rem system-ui, sans-serif; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Refill line</h1>
+  <p id="status" role="status">Not connected</p>
+  <button id="call" type="button">Start call</button>
+  <ol id="log"></ol>
+  <audio id="agent" autoplay></audio>
+</main>
+<script>
+  const statusLine = document.getElementById("status");
+  const callButton = document.getElementById("call");
+  const log = document.getElementById("log");
+  const agentAudio = document.getElementById("agent");
+  let connection = null;
+  let microphone = null;
+
+  function setCallUi(inCall, message) {
+    statusLine.textContent = message;
+    callButton.textContent = inCall ? "End call" : "Start call";
+    callButton.classList.toggle("stop", inCall);
+  }
+
+  function addLine({ role, text }) {
+    if (role !== "agent" && role !== "patient") return;
+    const item = document.createElement("li");
+    const speaker = document.createElement("b");
+    speaker.textContent = role === "agent" ? "Agent" : "Patient";
+    item.append(speaker, text);
+    log.append(item);
+    item.scrollIntoView({ block: "nearest" });
+  }
+
+  function iceGatheringFinished(peer) {
+    if (peer.iceGatheringState === "complete") return Promise.resolve();
+    return new Promise((resolve) => {
+      peer.addEventListener("icegatheringstatechange", () => {
+        if (peer.iceGatheringState === "complete") resolve();
+      });
+    });
+  }
+
+  async function startCall() {
+    setCallUi(true, "Connecting");
+    log.replaceChildren();
+    microphone = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+    const peer = new RTCPeerConnection();
+    connection = peer;
+    const messages = peer.createDataChannel("chat", { ordered: true });
+    messages.onmessage = (event) => addLine(JSON.parse(event.data));
+    peer.addTransceiver(microphone.getAudioTracks()[0], { direction: "sendrecv" });
+    peer.ontrack = (event) => { agentAudio.srcObject = new MediaStream([event.track]); };
+    peer.onconnectionstatechange = () => {
+      if (peer.connectionState === "connected") setCallUi(true, "In call");
+      if (["failed", "closed", "disconnected"].includes(peer.connectionState)) endCall();
+    };
+    await peer.setLocalDescription(await peer.createOffer());
+    await iceGatheringFinished(peer);
+    const response = await fetch("/api/offer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sdp: peer.localDescription.sdp, type: peer.localDescription.type }),
+    });
+    await peer.setRemoteDescription(await response.json());
+  }
+
+  function endCall() {
+    if (!connection) return;
+    connection.close();
+    connection = null;
+    microphone?.getTracks().forEach((track) => track.stop());
+    setCallUi(false, "Call ended");
+  }
+
+  callButton.addEventListener("click", () => {
+    if (connection) endCall();
+    else startCall().catch((error) => { endCall(); setCallUi(false, `Could not start: ${error.message}`); });
+  });
+  window.addEventListener("pagehide", endCall);
+</script>
+</body>
+</html>

@@ -10,6 +10,9 @@ FIXED_ANSWERS = {
     "Anything else you cannot answer": "I can't help with that, but a pharmacist can.",
 }
 SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
+QUESTION = re.compile(
+    r"^\W*(is|are|was|does|do|did|what|which|how|why|when|where|who|can|could|will|would)\b", re.IGNORECASE
+)
 MONEY = re.compile(r"\$|\b(?:dollars?|cents?)\b", re.IGNORECASE)
 NUMBER = re.compile(r"\d+")
 TOOL_SYNTAX = re.compile(r"[{}<>\[\]`]|tool_use|function_call")
@@ -26,8 +29,8 @@ def sentence_is_safe(sentence, known_facts):
     return all(item.lower() in known_facts for item in mentioned)
 
 
-def safe_answer(text, known_facts, verified):
-    if not verified:
+def safe_answer(text, known_facts, verified, patient_text):
+    if not verified or not QUESTION.search(patient_text):
         return text.strip() if text.strip() in FIXED_ANSWERS.values() else ""
     known_facts = known_facts.lower()
     sentences = SENTENCE_BOUNDARY.split(text.strip())

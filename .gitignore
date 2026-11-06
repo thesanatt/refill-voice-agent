@@ -13,3 +13,4 @@ build/
 .claude/settings.local.json
 *.db-wal
 *.db-shm
+tests/.audio_cache/

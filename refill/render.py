@@ -38,6 +38,7 @@ class Composed:
     text: str
     asked_pending: bool
     blocked_answer: bool = False
+    holding: bool = False
 
 
 def load_facts(conn, session):
@@ -210,7 +211,7 @@ def after_close_line(session, facts):
     return "A pharmacist will call you back."
 
 
-def compose_reply(session, facts, outcomes, known_facts):
+def compose_reply(session, facts, outcomes, known_facts, patient_text):
     if session["status"] != "active":
         return Composed(closing_line(session), asked_pending=False)
     codes = [outcome.code for outcome in outcomes]
@@ -218,7 +219,7 @@ def compose_reply(session, facts, outcomes, known_facts):
         line = "If this is an emergency, please hang up and call 911. I've also asked a pharmacist to call you back."
         return Composed(line, asked_pending=False)
     if "hold" in codes:
-        return Composed("Sure, take your time.", asked_pending=False)
+        return Composed("Sure, take your time.", asked_pending=False, holding=True)
     follow_up = next((IDENTITY_FOLLOW_UPS[code] for code in codes if code in IDENTITY_FOLLOW_UPS), None)
     if follow_up:
         return Composed(follow_up, asked_pending=False)
@@ -226,7 +227,7 @@ def compose_reply(session, facts, outcomes, known_facts):
     lines, blocked_answer = [], False
     for outcome in outcomes:
         if outcome.code == "answer":
-            answer = safe_answer(outcome.detail, known_facts, bool(session["verified_at"]))
+            answer = safe_answer(outcome.detail, known_facts, bool(session["verified_at"]), patient_text)
             blocked_answer = answer != outcome.detail.strip()
             lines.append(answer)
         else:

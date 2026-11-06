@@ -12,7 +12,7 @@ In scope:
 - The full happy path by voice, and the SMS fallback from any point in the call.
 - A completed refill request record holding every collected field.
 
-Not yet: real telephony or SMS providers, authentication, multiple patients, recovery after a server restart, a polished UI, test suites and CI. The extensions in `docs/TAKE_HOME.md` start only after the core flow works end to end, several runs in a row.
+Not yet: real telephony or SMS providers, authentication, multiple patients, recovery after a server restart, a polished UI and CI. The extensions in `docs/TAKE_HOME.md` start only after the core flow works end to end, several runs in a row.
 
 ## The flow
 

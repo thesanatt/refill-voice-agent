@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS messages (
     channel TEXT NOT NULL,
     role TEXT NOT NULL CHECK (role IN ('patient', 'agent')),
     text TEXT NOT NULL,
+    interrupted INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
 
@@ -83,6 +84,7 @@ CREATE TABLE IF NOT EXISTS turn_log (
     tools TEXT NOT NULL,
     llm_ms INTEGER,
     total_ms INTEGER NOT NULL,
+    first_audio_ms INTEGER,
     error_code TEXT,
     created_at TEXT NOT NULL
 );

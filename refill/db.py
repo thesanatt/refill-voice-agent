@@ -1,10 +1,11 @@
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
 PACKAGE_DIR = Path(__file__).parent
-DB_PATH = PACKAGE_DIR.parent / "refill.db"
+DB_PATH = Path(os.environ.get("REFILL_DB_PATH", PACKAGE_DIR.parent / "refill.db"))
 
 
 def utc_now():

@@ -52,7 +52,7 @@ Format:
 |---|---|
 | Patient interrupts the agent | Audio stops, the rest of the line is dropped, and the reply is read as a normal turn. The line is stored marked as interrupted. |
 | "Mm-hm", "okay", "yeah" while the agent talks | Not an interruption. The agent keeps talking and the word stays out of the context. Any other word does interrupt, even one word such as "Lisinopril" or "wait". This needs a small custom start strategy, because Pipecat's `min_words` would also block those one-word interruptions. |
-| Agent starts too early and the patient keeps going | Agent stops. The earlier fragment and the new words are read together as one turn. |
+| Agent starts too early and the patient keeps going | Agent stops. The earlier fragment and the new words are read together as one turn, unless the fragment already moved the flow forward. |
 | Patient speaks during a working phrase | The clip stops, any pending reply is dropped, and the turn is read again with the new words. |
 | "Yes, send it" cuts off the price line | Does not count as the yes. The agent repeats the price and the question. |
 | Both start at once | The agent yields. |
@@ -94,7 +94,9 @@ Format:
 - Two complete failed checks end verification for that session. Tools stay refused and the agent offers a pharmacist.
 - Questions about anyone else are refused with a fixed line. A caregiver gives the patient's name and date of birth.
 - A write needs evidence in the patient's own words. A yes counts only for the question pending when the turn began, an answer to a later step must name that topic, and `submit_request` needs a clear yes with no negation. `respond` counts only as the sole call, and repeated or cut-off calls are dropped. This sits in code because forced tool use makes the model over-eager: in testing it confirmed insurance on "can you repeat that".
-- Free text from the model is checked one sentence at a time before text-to-speech. A sentence with a number, price or drug name outside this session's facts, tool syntax, or a question of its own is dropped, and the pending question follows. Before verification only the fixed answers pass. Replies are capped short.
+- Free text from the model counts only when the patient asked a question, so it cannot announce an action that did not happen. It is checked one sentence at a time before text-to-speech: a sentence with a number, price or drug name outside this session's facts, tool syntax, or a question of its own is dropped, and the pending question follows. Before verification only the fixed answers pass. Replies are capped short.
+- Speech-to-text punctuation is never trusted as evidence. A spoken "Yes." came back as "Yes?" in testing, so a question is detected from its opening word.
+- If a reply is interrupted or never played, the price counts as unheard, and a yes cannot send the request until the price has been repeated.
 - "Ignore your instructions" or "I'm the pharmacist" changes nothing, because no tool can act on it. The agent gives a fixed line and the pending question.
 - State holds IDs and enums. Pharmacy text from a patient is stored as data and flagged for staff.
 - SMS replies pass through the same gates. "Wrong number" or "who is this" ends the thread and blocks further content.
@@ -138,12 +140,22 @@ Documented but not built: a patient calling back during an open SMS thread, seve
 - Why: a shorter turn, less data spoken aloud, and no risky alphanumeric string for text-to-speech.
 - Revisit if: a reviewer wants the full ID read back.
 
+## D10. Providers: AssemblyAI, Haiku 5.5 and Inworld (2026-11-06)
+- Options: speech-to-text from AssemblyAI Universal-3.6 Pro, Deepgram Flux or Nova-3; LLM from Claude Haiku 5.5, Sonnet 5.5 or Gemini Flash; text-to-speech from Inworld TTS-2, ElevenLabs Flash or Cartesia Sonic.
+- Chosen: AssemblyAI Universal-3.6 Pro, Claude Haiku 5.5 with thinking off and forced tool calls, and Inworld TTS-2. All three have Pipecat services in the pinned version except the LLM, which the core calls directly. Deepgram and ElevenLabs keys are held for comparison and for test voices.
+- Why: AssemblyAI allows mid-stream keyterm and turn changes. Haiku 5.5 measured about 840 ms median to a finished tool call on this project, and forced tool calls are not available on Sonnet 5.5. Inworld had the lowest independent first-audio figure among the shortlist, with inline pronunciation control. Most vendor figures are unverified here, so these are first picks, not conclusions.
+- Revisit if: drug names or dates transcribe poorly, or first audio is slow on real calls.
+
+## D11. Turn detection: Smart Turn with step-aware limits (2026-11-06)
+- Options: (A) Smart Turn with VAD, plus step-aware rules; (B) provider turn detection tuned mid-stream; (C) a plain silence timer.
+- Chosen: A. The core tells the turn layer the pending step. The fallback for a missed end of turn is 3.0 s at the date of birth, 1.0 s at the medication step and 0.6 s at yes/no steps. Barge-in stays on for every line, with a small list of acknowledgement words that do not interrupt unless the line is about to end, when they may be a real answer.
+- Why: it starts with no vendor dependency and runs in milliseconds locally. A silence timer scored far lower in the one comparison found, and dates of birth contain long pauses.
+- Revisit if: recordings of real speech show cut-offs this cannot fix, then move to B. Tune on human speech, since Smart Turn's false cut-off rate rose from 1.0% on real clips to 57.7% on synthetic ones in one benchmark.
+
 ## Open questions
 
-Numbers are kept so earlier references stay valid. Q1, Q3, Q4, Q7, Q10 and Q11 are decided above as D8, D1, D2, D3, D4 and D9.
+Numbers are kept so earlier references stay valid. Q1, Q2, Q3, Q4, Q7, Q8, Q10 and Q11 are decided above as D8, D10, D1, D2, D3, D11, D4 and D9.
 
-- Q2. Providers and models for each part.
 - Q5. Detecting an early hang-up: socket close, an explicit end button, silence timeout. When exactly is the SMS sent?
 - Q6. The SMS channel: does it confirm identity again, or trust the phone number on file?
-- Q8. Turn detection and interruptions (barge-in).
 - Q9. Interface: one page with call and SMS panes, or separate views.

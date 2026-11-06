@@ -4,6 +4,7 @@ from datetime import date
 from difflib import SequenceMatcher
 
 from refill.db import load_session, transaction, update_session, utc_now
+from refill.guard import QUESTION
 from refill.render import load_facts, pharmacy_written
 from refill.steps import MAX_IDENTITY_FAILURES, Step, allowed_tools
 
@@ -286,7 +287,7 @@ def message_supports(conn, session, name, arguments, pending_step, patient_text)
         or TOPIC_WORDS[name].search(patient_text)
         or (name == "confirm_pharmacy" and names_pharmacy(conn, arguments["pharmacy_id"], patient_text))
     )
-    return bool(says_yes) and "?" not in patient_text
+    return bool(says_yes) and not QUESTION.search(patient_text)
 
 
 def run_tool(session_id, name, arguments, pending_step, patient_text):

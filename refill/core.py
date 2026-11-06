@@ -6,7 +6,14 @@ from uuid import uuid4
 
 from refill.db import add_message, load_session, transaction, update_session, utc_now
 from refill.reader import OPENING_MESSAGE, read_message, state_note
-from refill.render import NO_PROGRESS_OUTCOMES, after_close_line, compose_reply, greeting, load_facts
+from refill.render import (
+    NO_PROGRESS_OUTCOMES,
+    after_close_line,
+    compose_reply,
+    greeting,
+    load_facts,
+    pending_question,
+)
 from refill.steps import FINISHED_STATUSES, Step, allowed_tools, next_step
 from refill.tools import definitions_for, mentions_refill_details, run_tool
 
@@ -16,7 +23,10 @@ session_locks = defaultdict(asyncio.Lock)
 @dataclass(frozen=True)
 class Reply:
     text: str
+    step: Step = Step.DONE
     ends_conversation: bool = False
+    holding: bool = False
+    advanced: bool = True
 
 
 @dataclass(frozen=True)
@@ -42,6 +52,43 @@ def open_session(caller_phone, channel):
 def drop_session(session_id):
     with transaction() as conn:
         conn.execute("UPDATE sessions SET status = 'dropped' WHERE id = ? AND status = 'active'", (session_id,))
+
+
+def mark_reply_unheard(session_id):
+    with transaction() as conn:
+        update_session(conn, session_id, price_stated_at=None)
+        conn.execute(
+            """
+            UPDATE messages SET interrupted = 1
+            WHERE id = (SELECT max(id) FROM messages WHERE session_id = ? AND role = 'agent')
+            """,
+            (session_id,),
+        )
+
+
+def pending_line(session_id):
+    with transaction() as conn:
+        session = load_session(conn, session_id)
+        return pending_question(session, load_facts(conn, session))
+
+
+def refill_keyterms(session_id):
+    with transaction() as conn:
+        facts = load_facts(conn, load_session(conn, session_id))
+    drugs = [prescription["medication"] for prescription in facts.prescriptions]
+    pharmacies = [pharmacy["name"] for pharmacy in facts.pharmacies]
+    return [*drugs, *pharmacies, facts.insurance_plan]
+
+
+def record_first_audio(session_id, milliseconds):
+    with transaction() as conn:
+        conn.execute(
+            """
+            UPDATE turn_log SET first_audio_ms = ?
+            WHERE id = (SELECT max(id) FROM turn_log WHERE session_id = ?)
+            """,
+            (milliseconds, session_id),
+        )
 
 
 def conversation_history(conn, session_id):
@@ -93,14 +140,14 @@ def run_calls(session_id, calls, pending_step, patient_text):
     ]
 
 
-def finish_turn(session_id, turn, calls, outcomes, error_code, llm_ms, started):
+def finish_turn(session_id, turn, text, calls, outcomes, error_code, llm_ms, started):
     made_progress = any(outcome.code not in NO_PROGRESS_OUTCOMES for outcome in outcomes)
     with transaction() as conn:
         session = load_session(conn, session_id)
         unclear_turns = 0 if made_progress else session["unclear_turns"] + 1
         update_session(conn, session_id, unclear_turns=unclear_turns)
         session = load_session(conn, session_id)
-        composed = compose_reply(session, load_facts(conn, session), outcomes, turn.note)
+        composed = compose_reply(session, load_facts(conn, session), outcomes, turn.note, text)
         if composed.asked_pending and next_step(session) is Step.CONFIRM:
             update_session(conn, session_id, price_stated_at=utc_now())
         add_message(conn, session_id, session["channel"], "agent", composed.text)
@@ -119,7 +166,13 @@ def finish_turn(session_id, turn, calls, outcomes, error_code, llm_ms, started):
                 utc_now(),
             ),
         )
-    return Reply(composed.text, ends_conversation=session["status"] != "active")
+    return Reply(
+        composed.text,
+        step=next_step(session),
+        ends_conversation=session["status"] != "active",
+        holding=composed.holding,
+        advanced=next_step(session).value != turn.step,
+    )
 
 
 async def handle_turn(session_id, text):
@@ -142,5 +195,5 @@ async def handle_turn(session_id, text):
             calls = [*calls, *second_calls]
         llm_ms = round((perf_counter() - started) * 1000)
         return await asyncio.to_thread(
-            finish_turn, session_id, turn, calls, outcomes, reading.error_code, llm_ms, started
+            finish_turn, session_id, turn, text, calls, outcomes, reading.error_code, llm_ms, started
         )
