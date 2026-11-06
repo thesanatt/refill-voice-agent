@@ -207,6 +207,12 @@ Documented but not built: a patient calling back during an open SMS thread, seve
 - Why: every call is saved today and nothing says so, and the server is safe only because it listens on localhost. A tunnel as things stand would let anyone with the URL start calls on paid keys.
 - Revisit if: the phone work is dropped.
 
+## D20. SMS stays simulated (2026-11-06)
+- Options: (A) real texts through OpenPhone; (B) the simulated chat view from the kickoff notes.
+- Chosen: B, agreed with Scope Health. Their numbers that can text US phones run production workflows, and a new registration is not worth it for a demo.
+- Why: the take-home is judged on how the fallback resumes from state, which is the same in both. Keeping `send_text` behind one function leaves real SMS as a small change later.
+- Revisit if: a registered number becomes available.
+
 ## Open questions
 
 None at the moment. Earlier references use these numbers: Q1 is D8, Q2 is D10, Q3 is D1, Q4 is D2, Q5 is D12, Q6 is D13, Q7 is D3, Q8 is D11, Q9 is D14, Q10 is D4 and Q11 is D9.
