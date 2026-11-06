@@ -65,6 +65,19 @@ SCRIPTS = {
         Say("Mm-hmm.", over_agent_after=1.0),
         Say("The cholesterol one."),
     ],
+    "declines_pharmacy": [
+        IDENTITY,
+        Say("The first one."),
+        Say("No."),
+        Say("Walgreens."),
+        Say("I don't know."),
+        Say("Yes."),
+    ],
+    "first_name_only": [
+        Say("My name is Sarah, and my date of birth is March fifteenth, nineteen eighty-five."),
+        Say("Sarah Chen."),
+        Say("The first one."),
+    ],
     "price_cut_off": [
         IDENTITY,
         Say("Lisinopril."),

@@ -113,6 +113,10 @@ Format:
 | "I have to go" or "text me instead" | `end_call`: the agent says it will text, then the SMS path runs. |
 | A drug not on the list | "I don't see that one on your list", then the list again and an offer of a pharmacist. |
 | A different pharmacy not in the table | Stored as patient text, read back and flagged for staff. |
+| "No" to the pharmacy on file, with none named | The agent lists the other pharmacies and asks which one. |
+| Only a first name | The agent asks for first and last name. This is not a failed attempt. |
+| "I don't know" about insurance | Recorded as unsure. The estimate comes from the plan on file, and the request is flagged for staff. It must really be said: a question never counts as an answer here. |
+| "I don't know" at another step | "That's okay", then the pending question. |
 | Insurance has changed, or no copay row exists | Noted and flagged. No price is quoted or invented. After the yes the request is created with `estimated_copay` empty. |
 | "No" at the final question | Nothing is created, the status becomes `declined`, and no text is sent. |
 | The LLM is slow or fails | After about 4 s, one retry, then the pending question is re-asked from state. A refusal is handled the same way. |

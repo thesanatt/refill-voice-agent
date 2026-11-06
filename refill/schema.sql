@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     prescription_id INTEGER REFERENCES prescriptions(id),
     pharmacy_id INTEGER REFERENCES pharmacies(id),
     pharmacy_text TEXT,
-    insurance_status TEXT CHECK (insurance_status IN ('current', 'changed')),
+    insurance_status TEXT CHECK (insurance_status IN ('current', 'changed', 'unsure')),
     price_stated_at TEXT,
     needs_pharmacist INTEGER NOT NULL DEFAULT 0,
     pharmacist_reason TEXT,

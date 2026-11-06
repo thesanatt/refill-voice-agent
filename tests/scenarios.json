@@ -705,6 +705,243 @@
     "being sent",
     "has been sent"
    ]
+  },
+  "first_name_only": {
+   "lines": [
+    "my name is Sarah. And my date of birth is 1985, March 15th.",
+    "Sarah Chen",
+    "lisinopril"
+   ],
+   "channel": "voice",
+   "want": {
+    "verified": true,
+    "rx": 1
+   },
+   "hear": [
+    "first and last name"
+   ],
+   "avoid": [
+    "couldn't match",
+    "not able to verify"
+   ]
+  },
+  "first_name_then_surname": {
+   "lines": [
+    "Sarah, March 15 1985",
+    "Chen",
+    "lisinopril"
+   ],
+   "channel": "voice",
+   "want": {
+    "verified": true,
+    "rx": 1
+   },
+   "hear": [
+    "first and last name"
+   ],
+   "avoid": [
+    "couldn't match"
+   ]
+  },
+  "first_name_wrong_date": {
+   "lines": [
+    "Sarah, March 16 1985",
+    "Sarah Chen",
+    "March 15 1985"
+   ],
+   "channel": "voice",
+   "want": {
+    "verified": true
+   },
+   "hear": [
+    "first and last name",
+    "date of birth again"
+   ],
+   "avoid": []
+  },
+  "no_to_pharmacy": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "The first one",
+    "no.",
+    "Walgreens",
+    "yes",
+    "yes"
+   ],
+   "channel": "voice",
+   "want": {
+    "status": "completed",
+    "pharm": 2,
+    "ins": "current"
+   },
+   "hear": [
+    "Which pharmacy would you like instead",
+    "Walmart Pharmacy on Market Street"
+   ],
+   "avoid": [
+    "Sorry"
+   ]
+  },
+  "no_then_unlisted": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "lisinopril",
+    "no",
+    "Bob's Drugs on Elm Street",
+    "yes",
+    "yes"
+   ],
+   "channel": "voice",
+   "want": {
+    "status": "completed",
+    "req_flag": 1
+   },
+   "hear": [
+    "Which pharmacy would you like instead",
+    "Bob's Drugs"
+   ],
+   "avoid": [
+    "Sorry"
+   ]
+  },
+  "no_then_changed_mind": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "lisinopril",
+    "no",
+    "actually CVS is fine",
+    "yes",
+    "yes"
+   ],
+   "channel": "voice",
+   "want": {
+    "status": "completed",
+    "pharm": 1
+   },
+   "hear": [
+    "Which pharmacy would you like instead"
+   ],
+   "avoid": [
+    "Sorry"
+   ]
+  },
+  "no_does_not_decline_elsewhere": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "lisinopril please"
+   ],
+   "channel": "voice",
+   "want": {
+    "status": "active",
+    "rx": 1,
+    "pharm": null
+   },
+   "hear": [
+    "Should I send it to CVS"
+   ],
+   "avoid": [
+    "Which pharmacy would you like instead"
+   ]
+  },
+  "dont_know_insurance": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "lisinopril",
+    "yes",
+    "I don't know",
+    "yes"
+   ],
+   "channel": "voice",
+   "want": {
+    "status": "completed",
+    "ins": "unsure",
+    "copay": 500,
+    "req_flag": 1
+   },
+   "hear": [
+    "pharmacy can check",
+    "five dollars"
+   ],
+   "avoid": [
+    "Sorry"
+   ]
+  },
+  "not_sure_insurance": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "lisinopril",
+    "yes",
+    "I'm not sure",
+    "yes"
+   ],
+   "channel": "voice",
+   "want": {
+    "status": "completed",
+    "ins": "unsure",
+    "req_flag": 1
+   },
+   "hear": [
+    "pharmacy can check"
+   ],
+   "avoid": [
+    "Sorry"
+   ]
+  },
+  "dont_know_pharmacy": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "lisinopril",
+    "I don't know",
+    "yes",
+    "yes",
+    "yes"
+   ],
+   "channel": "voice",
+   "want": {
+    "status": "completed",
+    "pharm": 1
+   },
+   "hear": [
+    "That's okay"
+   ],
+   "avoid": [
+    "Sorry"
+   ]
+  },
+  "question_is_not_unsure": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "lisinopril",
+    "yes",
+    "does my plan cover this?"
+   ],
+   "channel": "voice",
+   "want": {
+    "status": "active",
+    "ins": null
+   },
+   "hear": [],
+   "avoid": [
+    "dollars",
+    "pharmacy can check"
+   ]
+  },
+  "unsure_needs_saying": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "lisinopril",
+    "yes",
+    "hmm"
+   ],
+   "channel": "voice",
+   "want": {
+    "status": "active",
+    "ins": null
+   },
+   "hear": [],
+   "avoid": [
+    "dollars"
+   ]
   }
  },
  "holdout": {

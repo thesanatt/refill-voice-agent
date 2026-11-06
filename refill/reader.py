@@ -39,14 +39,16 @@ verify_identity:
 - Call it whenever the caller gives any part of their name or date of birth, with null for what is missing. \
 Use the name and date from anywhere in the conversation.
 - "March fifteenth, nineteen eighty-five" is year 1985, month 3, day 15. A two-digit year stays two digits.
+- Pass the name exactly as given, even if it is only a first name. Never add a name they did not say.
 - If the caller says what they want before giving a name or date, use respond with kind "repeat".
 
 Other tools:
 - select_medication: match the patient's words, including a purpose such as "the blood pressure one", to an id in \
 the latest system note. Pass null if they name something not on the list. Do not pick the closest name.
 - confirm_pharmacy: "yes" means the id of the pharmacy on file. Use another listed id, or other_pharmacy for one \
-not listed.
-- confirm_insurance: still_current is false if the patient says it changed.
+not listed. If the patient says no without naming a pharmacy, pass null for both.
+- confirm_insurance: status is "current" if it is still right, "changed" if the patient says it changed, and \
+"unsure" for "I don't know" or "I'm not sure".
 - submit_request: only when the patient says yes to sending the request.
 - request_pharmacist: use clinical_question for dose advice, side effects, interactions or symptoms, \
 asked_for_person when they ask for a person or pharmacist, and urgent for emergency language such as chest pain, \
@@ -57,6 +59,7 @@ request, "never mind", or "no" to a pharmacist calling back.
 respond, for everything else:
 - kind "repeat" when the patient asks you to say something again, or to hear a price or detail again.
 - kind "hold" only when the patient asks you to wait, such as "hold on" or "one second".
+- kind "unsure" when the patient says they don't know or aren't sure about the pending question.
 - kind "unclear" for background talk or anything you cannot understand.
 - kind "answer" with text, only when the patient asked a question. Write one short plain statement, with no \
 questions, no prices and no lists. What a medication on the list is for, its strength and how often it is taken \

@@ -21,6 +21,9 @@ AFFIRMATIVE = re.compile(
     re.IGNORECASE,
 )
 NEGATIVE = re.compile(r"\b(no|nope|not|don't|dont|wait|stop|cancel|never ?mind|hold on|hang on)\b", re.IGNORECASE)
+UNSURE = re.compile(
+    r"(don'?t|do not|didn'?t) (know|remember|recall)|not sure|unsure|no idea|can'?t remember", re.IGNORECASE
+)
 TOPIC_WORDS = {
     "confirm_pharmacy": re.compile(r"pharmac|drug ?store|cvs|walgreens|walmart|send it to", re.IGNORECASE),
     "confirm_insurance": re.compile(r"insurance|aetna|coverage|policy|\bplan\b", re.IGNORECASE),
@@ -73,8 +76,8 @@ TOOL_DEFINITIONS = [
     ),
     tool(
         "confirm_insurance",
-        "Record whether the insurance on file is still current.",
-        {"still_current": {"type": "boolean"}},
+        "Record whether the insurance on file is still current, has changed, or the patient is unsure.",
+        {"status": {"type": "string", "enum": ["current", "changed", "unsure"]}},
     ),
     tool("submit_request", "Send the refill request after the patient says yes to sending it.", {}),
     tool(
@@ -90,7 +93,7 @@ TOOL_DEFINITIONS = [
     tool(
         "respond",
         "Use when no other tool fits.",
-        {"kind": {"type": "string", "enum": ["answer", "repeat", "hold", "unclear"]}, "text": NULLABLE_TEXT},
+        {"kind": {"type": "string", "enum": ["answer", "repeat", "hold", "unsure", "unclear"]}, "text": NULLABLE_TEXT},
     ),
 ]
 
@@ -124,6 +127,8 @@ def verify_identity(conn, session, arguments):
     date_given = None not in (year, month, day)
     if not arguments["full_name"]:
         return [Outcome("missing_name" if date_given else "missing_identity")]
+    if len(normalized_name(arguments["full_name"]).split()) < 2:
+        return [Outcome("first_name_only")]
     if not date_given:
         return [Outcome("missing_date")]
     try:
@@ -164,7 +169,7 @@ def confirm_pharmacy(conn, session, arguments):
         return [Outcome("pharmacy_on_file" if pharmacy["id"] == on_file["pharmacy_id"] else "pharmacy_changed")]
     other_pharmacy = (arguments["other_pharmacy"] or "").strip()[:MAX_PHARMACY_TEXT_LENGTH]
     if not other_pharmacy:
-        return [Outcome("unclear")]
+        return [Outcome("pharmacy_declined")]
     if other_pharmacy == session["pharmacy_text"]:
         return [Outcome("unchanged")]
     update_session(conn, session["id"], pharmacy_id=None, pharmacy_text=other_pharmacy, price_stated_at=None)
@@ -172,7 +177,7 @@ def confirm_pharmacy(conn, session, arguments):
 
 
 def confirm_insurance(conn, session, arguments):
-    status = "current" if arguments["still_current"] else "changed"
+    status = arguments["status"]
     if status == session["insurance_status"]:
         return [Outcome("unchanged")]
     update_session(conn, session["id"], insurance_status=status, price_stated_at=None)
@@ -182,7 +187,7 @@ def confirm_insurance(conn, session, arguments):
 def submit_request(conn, session, _arguments):
     facts = load_facts(conn, session)
     needs_pharmacist = bool(
-        session["needs_pharmacist"] or session["pharmacy_text"] or session["insurance_status"] == "changed"
+        session["needs_pharmacist"] or session["pharmacy_text"] or session["insurance_status"] != "current"
     )
     conn.execute(
         """
@@ -265,7 +270,7 @@ def mentions_refill_details(session_id, patient_text):
 
 def confirms_what_is_on_file(conn, session, name, arguments):
     if name == "confirm_insurance":
-        return arguments["still_current"]
+        return arguments["status"] == "current"
     on_file = conn.execute("SELECT pharmacy_id FROM patients WHERE id = ?", (session["patient_id"],)).fetchone()
     return arguments["pharmacy_id"] == on_file["pharmacy_id"]
 
@@ -278,6 +283,12 @@ def message_supports(conn, session, name, arguments, pending_step, patient_text)
     is_pending = PENDING_TOOLS.get(pending_step) == name
     if name == "select_medication":
         return is_pending or names_prescription(conn, arguments["prescription_id"], patient_text)
+    if name == "confirm_pharmacy" and arguments["pharmacy_id"] is None and not arguments["other_pharmacy"]:
+        return is_pending and bool(NEGATIVE.search(patient_text))
+    if name == "confirm_insurance" and QUESTION.search(patient_text):
+        return False
+    if name == "confirm_insurance" and arguments["status"] == "unsure":
+        return is_pending and bool(UNSURE.search(patient_text))
     if not is_pending:
         return bool(TOPIC_WORDS[name].search(patient_text))
     if not confirms_what_is_on_file(conn, session, name, arguments):

@@ -10,10 +10,11 @@ ONES = (
 ).split()
 TENS = {2: "twenty", 3: "thirty", 4: "forty", 5: "fifty", 6: "sixty", 7: "seventy", 8: "eighty", 9: "ninety"}
 STREET_WORDS = {"St": "Street", "Ave": "Avenue", "Rd": "Road", "Blvd": "Boulevard"}
-NO_PROGRESS_OUTCOMES = {"unclear", "refused", "unchanged", "repeat"}
+NO_PROGRESS_OUTCOMES = {"unclear", "refused", "unchanged", "repeat", "unsure"}
 ACKNOWLEDGEMENT = "Great."
 IDENTITY_FOLLOW_UPS = {
     "missing_name": "And your full name?",
+    "first_name_only": "Can I get your first and last name?",
     "missing_date": "And your date of birth?",
     "invalid_date": "That date didn't sound right. Can you say your date of birth again?",
 }
@@ -52,7 +53,7 @@ def load_facts(conn, session):
     by_id = {pharmacy["id"]: pharmacy for pharmacy in pharmacies}
     chosen = next((p for p in prescriptions if p["id"] == session["prescription_id"]), None)
     copay = None
-    if chosen is not None and session["insurance_status"] == "current":
+    if chosen is not None and session["insurance_status"] in ("current", "unsure"):
         copay = conn.execute(
             "SELECT amount_cents FROM copays WHERE insurance_plan = ? AND medication = ?",
             (patient["insurance_plan"], chosen["medication"]),
@@ -139,6 +140,11 @@ def confirm_line(facts, channel):
     return f"{cost} {summary} Should I send that in?"
 
 
+def other_pharmacies_question(facts, channel):
+    others = [pharmacy_label(p, channel) for p in facts.pharmacies if p["id"] != facts.pharmacy_on_file["id"]]
+    return f"Which pharmacy would you like instead? I have {joined(others, 'and')}, or you can name another one."
+
+
 def greeting():
     return (
         f"Hi, I'm the AI assistant for {AGENT_NAME}. You can ask for a pharmacist at any time. "
@@ -182,6 +188,10 @@ def lead_for(outcome, session, facts):
             return f"Okay, I'll note {outcome.detail}. The pharmacy will arrange the transfer."
         case "insurance_changed":
             return "Thanks, I'll flag that for the pharmacy."
+        case "insurance_unsure":
+            return "No problem, the pharmacy can check that."
+        case "unsure":
+            return "That's okay."
         case "identity_mismatch":
             return "I couldn't match that."
         case "clinical_question":
@@ -223,6 +233,8 @@ def compose_reply(session, facts, outcomes, known_facts, patient_text):
     follow_up = next((IDENTITY_FOLLOW_UPS[code] for code in codes if code in IDENTITY_FOLLOW_UPS), None)
     if follow_up:
         return Composed(follow_up, asked_pending=False)
+    if "pharmacy_declined" in codes:
+        return Composed(other_pharmacies_question(facts, session["channel"]), asked_pending=False)
 
     lines, blocked_answer = [], False
     for outcome in outcomes:

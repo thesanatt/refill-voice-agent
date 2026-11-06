@@ -29,7 +29,7 @@ async def main():
         print(f"  after {n} answers: status={s['status']} next={got} request_rows={req} rx={s['prescription_id']} pharm={s['pharmacy_id']} ins={s['insurance_status']} {'ok' if ok else 'FAIL'}")
     print("-- refused tools (called directly, bypassing the model)")
     sid, _ = open_session("(555) 867-5309", "voice")
-    for name, args in [("select_medication", {"prescription_id": 1}), ("confirm_pharmacy", {"pharmacy_id": 1, "other_pharmacy": None}), ("confirm_insurance", {"still_current": True}), ("submit_request", {})]:
+    for name, args in [("select_medication", {"prescription_id": 1}), ("confirm_pharmacy", {"pharmacy_id": 1, "other_pharmacy": None}), ("confirm_insurance", {"status": "current"}), ("submit_request", {})]:
         o = run_tool(sid, name, args, Step.IDENTIFY, "yes"); ok = o[0].code == "refused"; bad += not ok
         print(f"  before verification {name}: {o[0].code} {'ok' if ok else 'FAIL'}")
     await handle_turn(sid, ID)
