@@ -201,6 +201,12 @@ Documented but not built: a patient calling back during an open SMS thread, seve
 - Why: speech recognition is the part most likely to fail a confused or stuck caller, and a key always works. Keys reply in about 0.3 s because they skip speech-to-text and the LLM. A 12-key pad was built and tested first, and dropped at the engineer's request: changing labels are more to read, and typing a date needs 0, which callers expect to mean a person.
 - Revisit if: real telephony is added, when the agent must announce the keys and callers cannot see them.
 
+## D19. Conditions for real phone calls (2026-11-06)
+- Options: (A) connect Twilio as the app stands; (B) add a recording notice and lock down the public routes as part of that work.
+- Chosen: B. Before anyone calls a real number, the agent says the call is recorded, or recording is off on the phone line. A public tunnel exposes only the Twilio and Quo routes, not the call page or `/api/offer`, and every inbound request has its Twilio or Quo signature verified.
+- Why: every call is saved today and nothing says so, and the server is safe only because it listens on localhost. A tunnel as things stand would let anyone with the URL start calls on paid keys.
+- Revisit if: the phone work is dropped.
+
 ## Open questions
 
 None at the moment. Earlier references use these numbers: Q1 is D8, Q2 is D10, Q3 is D1, Q4 is D2, Q5 is D12, Q6 is D13, Q7 is D3, Q8 is D11, Q9 is D14, Q10 is D4 and Q11 is D9.
