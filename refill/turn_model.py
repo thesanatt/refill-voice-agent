@@ -7,7 +7,11 @@ is a cost choice. See D15 in docs/DECISIONS.md and tests/fit_turn_model.py.
 """
 import math
 import re
+from collections import deque
+from difflib import SequenceMatcher
 from statistics import NormalDist
+
+from loguru import logger
 
 from refill.steps import Step
 
@@ -20,6 +24,9 @@ PAUSE_LOG_MEAN = -0.388
 PAUSE_LOG_SCALE = 0.596
 ACCEPTED_CUT_OFF_RISK = {Step.IDENTIFY: 0.05}
 DEFAULT_CUT_OFF_RISK = 0.10
+OWN_VOICE_SHARE = 0.75
+OWN_VOICE_PROOF_WORDS = 5
+OWN_VOICE_RUN_WORDS = 2
 
 MONTH = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*"
 SPOKEN_DAY = (
@@ -33,7 +40,7 @@ FULL_DATE = re.compile(
     r"|\b\d{1,2}[/ -]\d{1,2}[/ -]\d{2,4}\b",
     re.IGNORECASE,
 )
-IDENTITY_STARTED = re.compile(rf"\b(name|birth|born|{MONTH}|nineteen)\b|\d", re.IGNORECASE)
+IDENTITY_STARTED = re.compile(rf"\b(name|birth|born|{MONTH}|nineteen|{SPOKEN_DAY})\b|\d", re.IGNORECASE)
 SHORT_ANSWER = re.compile(
     r"\b(yes|yeah|yep|yup|no|nope|sure|okay|ok|correct|right|send it|go ahead|please|don'?t know|not sure|hold on"
     r"|one (?:second|moment|minute)|wait|never ?mind|same|cvs|walgreens|walmart|main street|oak|market|pharmacist)\b",
@@ -58,7 +65,7 @@ DIRECT_ANSWER = re.compile(
 def question_asked(line):
     if "last name" in line or line.endswith("full name?"):
         return "name"
-    if "date of birth" in line and "full name" not in line:
+    if "born" in line or ("date of birth" in line and "full name" not in line):
         return "date"
     return "both"
 
@@ -88,3 +95,47 @@ def required_silence(state, step):
     if pause_survival >= 1:
         return 0.0
     return math.exp(PAUSE_LOG_MEAN + PAUSE_LOG_SCALE * NormalDist().inv_cdf(1 - pause_survival))
+
+
+def spoken_words(text):
+    return re.findall(r"[a-z']+", text.lower().replace("-", " ").replace("milligrams", "mg"))
+
+
+class OwnVoice:
+    """Spots the agent's words coming back through the patient's microphone. See D29."""
+
+    def __init__(self):
+        self._lines = deque(maxlen=2)
+        self.proven = False
+
+    def expect(self, text):
+        self._lines.append(spoken_words(text))
+
+    def _matches(self, heard):
+        line = [word for words in self._lines for word in words]
+        return SequenceMatcher(None, heard, line, autojunk=False).get_matching_blocks()
+
+    def repeats_start(self, text):
+        heard = spoken_words(text)
+        return bool(heard and self._lines) and self._lines[-1][: len(heard)] == heard
+
+    def sounds_like_line(self, text):
+        heard = spoken_words(text)
+        if not heard:
+            return not re.search(r"\d", text)
+        matches = self._matches(heard)
+        opening = len(heard) >= OWN_VOICE_RUN_WORDS and self.repeats_start(text)
+        if not self.proven and (opening or max(match.size for match in matches) >= OWN_VOICE_PROOF_WORDS):
+            logger.info(f"Own voice proven by: {text}")
+            self.proven = True
+        return sum(match.size for match in matches) / len(heard) >= OWN_VOICE_SHARE
+
+    def without_line(self, text):
+        words = text.split()
+        positions = [index for index, word in enumerate(words) if spoken_words(word)]
+        heard = ["".join(spoken_words(words[index])) for index in positions]
+        repeated = set()
+        for match in self._matches(heard):
+            if match.size >= OWN_VOICE_RUN_WORDS:
+                repeated |= set(range(positions[match.a], positions[match.a + match.size - 1] + 1))
+        return " ".join(word for index, word in enumerate(words) if index not in repeated)

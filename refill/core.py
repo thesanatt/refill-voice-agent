@@ -5,9 +5,10 @@ from time import perf_counter
 from uuid import uuid4
 
 from refill.db import add_message, load_session, transaction, update_session, utc_now
-from refill.reader import OPENING_MESSAGE, exact_reading, read_message, state_note
+from refill.reader import OPENING_MESSAGE, ToolCall, exact_reading, read_message, state_note
 from refill.render import (
     NO_PROGRESS_OUTCOMES,
+    Composed,
     after_close_line,
     compose_reply,
     first_text,
@@ -16,11 +17,13 @@ from refill.render import (
     pending_question,
 )
 from refill.steps import FINISHED_STATUSES, Step, allowed_tools, identity_locked, next_step
-from refill.tools import definitions_for, mentions_refill_details, run_tool
+from refill.tools import definitions_for, mentions_refill_details, run_tool, states_different_dose
 
 LAST_EXCHANGE_MESSAGES = 3
+MAX_UNCLEAR_TURNS = 6
 NO_OPEN_REQUEST_TEXT = "I don't have an open request for this number. Please call us to start a refill."
 IDENTITY_FAILURE_LINES = ("I couldn't match that", "I'm not able to verify that")
+NOT_HEARD_LINE = "Sorry, I didn't catch that. "
 
 session_locks = defaultdict(asyncio.Lock)
 
@@ -122,13 +125,14 @@ async def receive_text(phone, text):
     return await handle_turn(session_id, text)
 
 
-def mark_reply_unheard(session_id):
+def mark_reply_unheard(session_id, question_heard=False):
     with transaction() as conn:
-        session = load_session(conn, session_id)
-        last_line = last_agent_lines(conn, session_id, 1)[0]
-        attempt_went_unheard = last_line.startswith(IDENTITY_FAILURE_LINES)
-        failures = max(0, session["identity_failures"] - attempt_went_unheard)
-        update_session(conn, session_id, price_stated_at=None, identity_failures=failures)
+        if not question_heard:
+            session = load_session(conn, session_id)
+            last_line = last_agent_lines(conn, session_id, 1)[0]
+            attempt_went_unheard = last_line.startswith(IDENTITY_FAILURE_LINES)
+            failures = max(0, session["identity_failures"] - attempt_went_unheard)
+            update_session(conn, session_id, price_stated_at=None, identity_failures=failures, question_unheard=1)
         conn.execute(
             """
             UPDATE messages SET interrupted = 1
@@ -146,10 +150,30 @@ def last_agent_lines(conn, session_id, count):
     return [row["text"] for row in rows]
 
 
-def pending_line(session_id):
+def record_line(session_id, text=None):
+    """Log a line said outside a turn. With no text, the line is the pending question, asked again in full."""
     with transaction() as conn:
         session = load_session(conn, session_id)
-        return pending_question(session, load_facts(conn, session))
+        line = text or pending_question(session, load_facts(conn, session))
+        if text is None:
+            update_session(conn, session_id, question_unheard=0)
+        if text is None and next_step(session) is Step.CONFIRM:
+            update_session(conn, session_id, price_stated_at=utc_now())
+        add_message(conn, session_id, session["channel"], "agent", line)
+    return line
+
+
+def hearing_lost_line(session):
+    follow_up = "A pharmacist will call you back." if identity_locked(session) else "I'll text you so we can finish."
+    return f"I'm having trouble hearing you. {follow_up} Goodbye."
+
+
+def say_hearing_lost(session_id):
+    with transaction() as conn:
+        session = load_session(conn, session_id)
+        line = hearing_lost_line(session)
+        add_message(conn, session_id, session["channel"], "agent", line)
+    return line
 
 
 def refill_keyterms(session_id):
@@ -202,9 +226,9 @@ def begin_turn(session_id, text):
         return load_turn(conn, session, text)
 
 
-def turn_after_verification(session_id):
+def turn_after_verification(session_id, text):
     with transaction() as conn:
-        return load_turn(conn, load_session(conn, session_id), just_verified=True)
+        return load_turn(conn, load_session(conn, session_id), text, just_verified=True)
 
 
 def everything_the_patient_said(session_id):
@@ -218,6 +242,14 @@ def calls_to_run(reading):
     return list({call.name: call for call in field_calls or reading.calls[:1]}.values())
 
 
+def early_answers(calls):
+    """The extra read after verification records early answers, and it must call some tool even with nothing to say."""
+    return [
+        call for call in calls
+        if call.name != "request_pharmacist" or call.arguments["reason"] in ("urgent", "crisis")
+    ]  # fmt: skip
+
+
 def run_calls(session_id, calls, pending_step, patient_text):
     return [
         outcome
@@ -229,7 +261,7 @@ def run_calls(session_id, calls, pending_step, patient_text):
 def rephrased_if_repeated(conn, session_id, text):
     recent = last_agent_lines(conn, session_id, 2)
     if len(recent) == 2 and all(line.endswith(text) for line in recent):
-        return f"Sorry, I need this to keep going. {text}"
+        return f"One more time. {text.removeprefix(NOT_HEARD_LINE)}"
     return text
 
 
@@ -249,11 +281,19 @@ def finish_turn(session_id, turn, text, calls, outcomes, error_code, llm_ms, sta
         update_session(conn, session_id, unclear_turns=unclear_turns)
         session = load_session(conn, session_id)
         facts = load_facts(conn, session)
-        composed = compose_reply(session, facts, outcomes, turn.note, text, list_already_read(conn, session_id))
+        if session["channel"] == "voice" and unclear_turns >= MAX_UNCLEAR_TURNS:
+            update_session(conn, session_id, status="dropped")
+            composed = Composed(hearing_lost_line(session), asked_pending=False)
+            session = load_session(conn, session_id)
+        else:
+            composed = compose_reply(session, facts, outcomes, turn.note, text, list_already_read(conn, session_id))
+        if composed.asked_pending:
+            update_session(conn, session_id, question_unheard=0)
         if composed.asked_pending and next_step(session) is Step.CONFIRM:
             update_session(conn, session_id, price_stated_at=utc_now())
-        reply_text = rephrased_if_repeated(conn, session_id, composed.text)
-        add_message(conn, session_id, session["channel"], "agent", reply_text)
+        reply_text = rephrased_if_repeated(conn, session_id, composed.text) if composed.text else ""
+        if reply_text:
+            add_message(conn, session_id, session["channel"], "agent", reply_text)
         conn.execute(
             """
             INSERT INTO turn_log (session_id, step, tools, llm_ms, total_ms, error_code, created_at)
@@ -289,13 +329,17 @@ async def handle_turn(session_id, text):
         outcomes = await asyncio.to_thread(run_calls, session_id, calls, Step(turn.step), text)
         patient_text = everything_the_patient_said(session_id)
         if any(outcome.code == "verified" for outcome in outcomes) and mentions_refill_details(session_id, patient_text):
-            follow_up = await asyncio.to_thread(turn_after_verification, session_id)
-            second_reading = await read_message(follow_up.history, follow_up.note, follow_up.tools)
-            second_calls = calls_to_run(second_reading)
+            follow_up = await asyncio.to_thread(turn_after_verification, session_id, text)
+            second_reading = follow_up.exact or await read_message(follow_up.history, follow_up.note, follow_up.tools)
+            second_calls = early_answers(calls_to_run(second_reading))
             outcomes += await asyncio.to_thread(
                 run_calls, session_id, second_calls, Step(follow_up.step), patient_text
             )
             calls = [*calls, *second_calls]
+        if await asyncio.to_thread(states_different_dose, session_id, text):
+            dose_call = ToolCall("request_pharmacist", {"reason": "clinical_question"})
+            outcomes += await asyncio.to_thread(run_calls, session_id, [dose_call], Step(turn.step), text)
+            calls = [*calls, dose_call]
         llm_ms = round((perf_counter() - started) * 1000)
         return await asyncio.to_thread(
             finish_turn, session_id, turn, text, calls, outcomes, reading.error_code, llm_ms, started

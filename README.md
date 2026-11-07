@@ -51,6 +51,8 @@ The database is `refill.db`, created and seeded on first run. Delete it to start
 
 ## Tests
 
+Results, what the tests found and the known limits are in `docs/QA.md`.
+
 ```bash
 uv run python -m tests.exit_checks
 uv run python -m tests.sms_fallback --runs 3
@@ -58,7 +60,26 @@ uv run python -m tests.run_scenarios --set tuned --runs 3
 uv run python -m tests.run_scenarios --set holdout --runs 3
 ```
 
-These run typed conversations against a temporary database and assert on the stored rows. `tuned` holds the scenarios the code was fixed against, and `holdout` holds wording written afterwards.
+These run typed conversations against a temporary database and assert on the stored rows. `tuned` holds the scenarios the code was fixed against, and `holdout` holds wording written afterwards. `real` replays failures from real calls, and `blind` and `blind2` were written by a separate agent that could not see the code. Every run also applies the rules in `tests/invariants.py`, which you can point at any database:
+
+```bash
+uv run python -m tests.invariants refill.db
+```
+
+Attacks that skip the model, such as forged tool calls, racing messages and junk input:
+
+```bash
+uv run python -m tests.hostile_inputs
+```
+
+Simulated phone calls run over real WebRTC, each on its own server and temporary database. `tests/phone_line.py` degrades the audio with 8 kHz codecs, packet loss, dropouts, room echo and background noise that keeps playing between sentences. The caller reacts to what the agent asks, so a misheard date costs another try rather than a broken test. AssemblyAI limits a free account to 5 new sessions a minute, so the calls pace themselves.
+
+```bash
+uv run python -m tests.phone_calls --conditions landline,cafe --personas plain,older_man
+uv run python -m tests.phone_moves
+```
+
+`phone_moves` covers what needs real timing: talking over the agent at chosen moments, slow speech, noise, the agent's voice leaking into the microphone, a call dropped at every step and finished by text, and each outside service failing.
 
 With the server running, this places real WebRTC calls using an AI patient voice, and reports the gap from the end of the patient's speech to the first agent audio:
 
@@ -67,7 +88,7 @@ uv run python -m tests.voice_call --script happy --calls 5
 uv run python -m tests.voice_call --script price_cut_off
 ```
 
-The other scripts are `barge_in`, `acknowledgement`, `declines_pharmacy`, `first_name_only` and `keypad`. Synthetic speech can make turn detection behave differently from a real voice, so treat these timings as a guide.
+The other scripts are `short_answers`, `barge_in`, `acknowledgement`, `declines_pharmacy`, `first_name_only` and `keypad`. Synthetic speech can make turn detection behave differently from a real voice, so treat these timings as a guide.
 
 To refit the turn model from labelled real calls and compare policies on held-out calls:
 

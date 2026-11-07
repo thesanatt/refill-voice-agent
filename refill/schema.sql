@@ -48,6 +48,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     needs_pharmacist INTEGER NOT NULL DEFAULT 0,
     pharmacist_reason TEXT,
     unclear_turns INTEGER NOT NULL DEFAULT 0,
+    wants_other_pharmacy INTEGER NOT NULL DEFAULT 0,
+    question_unheard INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     sms_sent_at TEXT
 );

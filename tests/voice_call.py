@@ -6,6 +6,7 @@ and speaker hardware, and synthetic speech can make turn detection behave differ
 """
 import argparse
 import asyncio
+import contextlib
 import fractions
 import wave
 import hashlib
@@ -36,6 +37,7 @@ AGENT_LOUD_RMS = 250
 AGENT_QUIET_SECONDS = 1.2
 INTERRUPTED_AUDIO_TAIL_SECONDS = 0.7
 TURN_TIMEOUT_SECONDS = 25
+SPEAKING_MARGIN_SECONDS = 2
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,13 @@ SCRIPTS = {
         Say("Yes, that's the right pharmacy."),
         Say("Yes, that's still my insurance."),
         Say("Yes, please send it in."),
+    ],
+    "short_answers": [
+        IDENTITY,
+        Say("Lisinopril."),
+        Say("Yes."),
+        Say("Yes, that's right."),
+        Say("Yes, please."),
     ],
     "barge_in": [
         IDENTITY,
@@ -109,9 +118,10 @@ SCRIPTS = {
 class PatientMicrophone(MediaStreamTrack):
     kind = "audio"
 
-    def __init__(self):
+    def __init__(self, idle_sound=None):
         super().__init__()
         self._queue = deque()
+        self._idle_sound = idle_sound
         self._samples_sent = 0
         self._started_at = None
         self.finished_speaking = asyncio.Event()
@@ -120,12 +130,22 @@ class PatientMicrophone(MediaStreamTrack):
         self.finished_speaking.clear()
         self._queue.extend(pcm[i : i + FRAME_SAMPLES] for i in range(0, len(pcm), FRAME_SAMPLES))
 
+    async def wait_until_spoken(self):
+        seconds = len(self._queue) * FRAME_SAMPLES / SAMPLE_RATE + SPEAKING_MARGIN_SECONDS
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(self.finished_speaking.wait(), seconds)
+
+    def _idle_chunk(self):
+        if self._idle_sound is None:
+            return np.zeros(FRAME_SAMPLES, dtype=np.int16)
+        return self._idle_sound[np.arange(self._samples_sent, self._samples_sent + FRAME_SAMPLES) % len(self._idle_sound)]
+
     async def recv(self):
         if self._started_at is None:
             self._started_at = time.monotonic()
         target = self._started_at + self._samples_sent / SAMPLE_RATE
         await asyncio.sleep(max(0, target - time.monotonic()))
-        chunk = np.zeros(FRAME_SAMPLES, dtype=np.int16)
+        chunk = self._idle_chunk()
         if self._queue:
             samples = self._queue.popleft()
             chunk[: len(samples)] = samples
@@ -180,14 +200,14 @@ def trimmed(pcm):
     return pcm[: (loud[-1] + 1) * FRAME_SAMPLES] if len(loud) else pcm
 
 
-async def patient_audio(http, text):
+async def patient_audio(http, text, voice=VOICE_ID, model=VOICE_MODEL):
     CACHE_DIR.mkdir(exist_ok=True)
-    cached = CACHE_DIR / f"{hashlib.sha256(f'{VOICE_ID}{text}'.encode()).hexdigest()[:16]}.pcm"
+    cached = CACHE_DIR / f"{hashlib.sha256(f'{voice}{model}{text}'.encode()).hexdigest()[:16]}.pcm"
     if not cached.exists():
         async with http.post(
-            f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}?output_format=pcm_16000",
+            f"https://api.elevenlabs.io/v1/text-to-speech/{voice}?output_format=pcm_16000",
             headers={"xi-api-key": os.environ["ELEVENLABS_API_KEY"]},
-            json={"text": text, "model_id": VOICE_MODEL},
+            json={"text": text, "model_id": model},
         ) as response:
             response.raise_for_status()
             cached.write_bytes(await response.read())
@@ -241,7 +261,7 @@ async def place_call(script, recording_path=None):
             transcript.append(("key", step.key))
         else:
             microphone.speak(clip)
-            await microphone.finished_speaking.wait()
+            await microphone.wait_until_spoken()
         speech_ended_at = time.monotonic()
         tail = 0 if step.over_agent_after is None else INTERRUPTED_AUDIO_TAIL_SECONDS
         first_audio_at = await ear.wait_for_speech_after(speech_ended_at + tail)

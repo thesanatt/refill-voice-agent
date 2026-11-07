@@ -14,11 +14,12 @@ from pipecat.frames.frames import (
     CancelFrame,
     EndFrame,
     InputDTMFFrame,
+    InterimTranscriptionFrame,
     InterruptionFrame,
     LLMContextFrame,
     OutputTransportMessageUrgentFrame,
     StartFrame,
-    STTUpdateSettingsFrame,
+    TranscriptionFrame,
     TTSSpeakFrame,
     UserIdleTimeoutUpdateFrame,
     VADUserStartedSpeakingFrame,
@@ -33,6 +34,7 @@ from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.assemblyai.stt import AssemblyAISTTService
 from pipecat.services.inworld.tts import InworldTTSService
+from pipecat.transcriptions.language import Language
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 from pipecat.turns.user_start.min_words_user_turn_start_strategy import MinWordsUserTurnStartStrategy
@@ -44,19 +46,20 @@ from refill.core import (
     handle_turn,
     mark_reply_unheard,
     open_session,
-    pending_line,
     record_first_audio,
+    record_line,
     refill_keyterms,
+    say_hearing_lost,
 )
 from refill.reader import warm_up
 from refill.steps import Step
 from refill.tools import TOOL_DEFINITIONS, definitions_for
-from refill.turn_model import question_asked, required_silence, slot_state
+from refill.turn_model import OwnVoice, question_asked, required_silence, slot_state
 
 load_dotenv()
 
 DEMO_CALLER_PHONE = "(555) 867-5309"
-RECORDINGS_DIR = Path(__file__).parent.parent / "recordings"
+RECORDINGS_DIR = Path(os.environ.get("REFILL_RECORDINGS_DIR", Path(__file__).parent.parent / "recordings"))
 STT_MODEL = "universal-3-6-pro"
 TTS_MODEL = "inworld-tts-2"
 TTS_VOICE = "Ashley"
@@ -69,6 +72,8 @@ IDLE_PROMPT_SECONDS = 10.0
 HOLD_SECONDS = 30.0
 EARLY_CUT_OFF_SECONDS = 1.5
 ANSWER_WINDOW_SECONDS = 1.5
+ROOM_NOISE_WAIT_SECONDS = 1.5
+OWN_VOICE_TAIL_SECONDS = 1.5
 SPOKEN_WORDS_PER_SECOND = 2.5
 ACKNOWLEDGEMENTS = {"mm hm", "mm hmm", "mhm", "mm", "hmm", "uh huh", "okay", "ok", "yeah", "right"}
 
@@ -93,12 +98,19 @@ def save_recording(session_id, audio, sample_rate, num_channels):
         recording.writeframes(audio)
 
 
+class RefillSpeechInput(AssemblyAISTTService):
+    async def use_keyterms(self, keyterms):
+        self._settings.keyterms_prompt = keyterms
+        await self._send_update_configuration(keyterms_prompt=keyterms)
+
+
 class SlotAwareStopStrategy(SpeechTimeoutUserTurnStopStrategy):
     def __init__(self):
         super().__init__()
         self._step = Step.IDENTIFY
         self._question = "both"
         self._vad_stopped_at = None
+        self._words_settled_timer = None
 
     def expect(self, step, question):
         self._step = step
@@ -109,15 +121,44 @@ class SlotAwareStopStrategy(SpeechTimeoutUserTurnStopStrategy):
         elapsed = self._stop_secs + time.monotonic() - self._vad_stopped_at
         return max(0.0, needed - elapsed)
 
+    async def _stop_words_settled_timer(self):
+        if self._words_settled_timer:
+            await self.task_manager.cancel_task(self._words_settled_timer)
+            self._words_settled_timer = None
+
+    async def _restart_words_settled_timer(self):
+        await self._stop_words_settled_timer()
+        needed = required_silence(slot_state(self._step, self._question, self._text), self._step)
+        wait = max(ROOM_NOISE_WAIT_SECONDS, needed)
+        self._words_settled_timer = self.task_manager.create_task(self._end_turn_after(wait), f"{self}::words_settled")
+
+    async def _end_turn_after(self, wait):
+        await asyncio.sleep(wait)
+        self._words_settled_timer = None
+        await self.report_user_turn_stopped()
+
+    async def cleanup(self):
+        await self._stop_words_settled_timer()
+        await super().cleanup()
+
+    async def process_frame(self, frame):
+        await super().process_frame(frame)
+        if isinstance(frame, InterimTranscriptionFrame) and self._words_settled_timer:
+            await self._restart_words_settled_timer()
+
     async def handle_user_turn_stopped(self):
         self._vad_stopped_at = None
+        await self._stop_words_settled_timer()
         await super().handle_user_turn_stopped()
 
     async def _handle_vad_user_started_speaking(self, frame):
         self._vad_stopped_at = None
         await super()._handle_vad_user_started_speaking(frame)
+        if self._text:
+            await self._restart_words_settled_timer()
 
     async def _handle_vad_user_stopped_speaking(self, frame):
+        await self._stop_words_settled_timer()
         self._vad_stopped_at = time.monotonic()
         self._stop_secs = frame.stop_secs
         self._user_speech_timeout = self._remaining_wait(self._text)
@@ -132,38 +173,72 @@ class SlotAwareStopStrategy(SpeechTimeoutUserTurnStopStrategy):
         if vad_stopped and not self._user_speech_wait_done:
             self._user_speech_timeout = wait
             await self._restart_user_speech_timer()
+        if self._vad_user_speaking:
+            await self._restart_words_settled_timer()
 
 
 class SpeechOverAgentStrategy(MinWordsUserTurnStartStrategy):
     def __init__(self):
         super().__init__(min_words=1)
-        self._line_seconds = 0.0
-        self._line_ends_at = 0.0
+        self._question_seconds = 0.0
+        self._question_ends_at = 0.0
+        self._line_stopped_at = 0.0
+        self._own_voice = OwnVoice()
+        self._turn_began_over_line = False
+        self._turn_began_after_line = False
 
     def expect_line(self, text):
-        self._line_seconds = len(text.split()) / SPOKEN_WORDS_PER_SECOND
+        question = text[: text.rfind("?") + 1] or text
+        self._question_seconds = len(question.split()) / SPOKEN_WORDS_PER_SECOND
+        self._own_voice.expect(text)
+
+    def question_was_heard(self):
+        return time.monotonic() >= self._question_ends_at - ANSWER_WINDOW_SECONDS
+
+    def without_own_voice(self, text):
+        voice = self._own_voice
+        over_line = self._turn_began_over_line
+        if over_line and (voice.repeats_start(text) or (voice.sounds_like_line(text) and voice.proven)):
+            return ""
+        if voice.proven and (self._turn_began_over_line or self._turn_began_after_line):
+            return voice.without_line(text)
+        return text
 
     async def process_frame(self, frame):
-        if isinstance(frame, VADUserStartedSpeakingFrame) and not self._bot_speaking:
-            await self.report_user_turn_started()
+        if isinstance(frame, VADUserStartedSpeakingFrame):
+            self._turn_began_over_line = self._bot_speaking
+            self._turn_began_after_line = time.monotonic() - self._line_stopped_at < OWN_VOICE_TAIL_SECONDS
+            if not self._bot_speaking:
+                await self.report_user_turn_started()
         return await super().process_frame(frame)
 
     async def _handle_bot_started_speaking(self, frame):
         await super()._handle_bot_started_speaking(frame)
-        self._line_ends_at = time.monotonic() + self._line_seconds
+        self._question_ends_at = time.monotonic() + self._question_seconds
+
+    async def _handle_bot_stopped_speaking(self, frame):
+        await super()._handle_bot_stopped_speaking(frame)
+        self._line_stopped_at = time.monotonic()
 
     async def _handle_transcription(self, frame):
-        line_has_time_left = time.monotonic() < self._line_ends_at - ANSWER_WINDOW_SECONDS
-        if self._bot_speaking and line_has_time_left and normalized_speech(frame.text) in ACKNOWLEDGEMENTS:
+        if not self._bot_speaking:
+            await self.report_user_turn_started()
+            return
+        finished = isinstance(frame, TranscriptionFrame)
+        voice = self._own_voice
+        own_voice = voice.sounds_like_line(frame.text)
+        acknowledged = not self.question_was_heard() and normalized_speech(frame.text) in ACKNOWLEDGEMENTS
+        if acknowledged or (finished and (voice.repeats_start(frame.text) or (own_voice and voice.proven))):
             await self.trigger_reset_aggregation()
-        else:
+        elif finished or not own_voice:
             await self.report_user_turn_started()
 
 
 class CallBridge(FrameProcessor):
-    def __init__(self, session_id, stop_strategy, start_strategy):
+    def __init__(self, session_id, speech_input, stop_strategy, start_strategy):
         super().__init__()
         self._session_id = session_id
+        self._speech_input = speech_input
         self._stop_strategy = stop_strategy
         self._start_strategy = start_strategy
         self._working_phrases_used = 0
@@ -172,6 +247,8 @@ class CallBridge(FrameProcessor):
         self._task = None
         self._generation = 0
         self._reply_unfinished = False
+        self._reading_turn = False
+        self._line_was_cut = False
         self._line_started_at = None
         self._unanswered_text = ""
         self._merge_next_turn = False
@@ -216,42 +293,68 @@ class CallBridge(FrameProcessor):
         await self._handle_interruption()
         self._merge_next_turn = False
         self._reply_unfinished = True
+        self._reading_turn = True
         self._line_started_at = None
         await self._turns.put((command, f"Pressed {key}: {command}"))
+
+    async def handle_lost_hearing(self):
+        self._ending = True
+        await self._speak_line(await asyncio.to_thread(say_hearing_lost, self._session_id))
 
     async def handle_idle(self):
         self._idle_prompts += 1
         if self._idle_prompts == 1:
-            await self._speak_line(await asyncio.to_thread(pending_line, self._session_id))
+            await self._speak_line(await asyncio.to_thread(record_line, self._session_id))
         elif self._idle_prompts == 2:
-            await self._speak_line("Take your time.")
+            await self._speak_line(await asyncio.to_thread(record_line, self._session_id, "Take your time."))
+        elif self._idle_prompts == 3:
+            await self.handle_lost_hearing()
 
     async def _queue_turn(self, context):
         messages = context.get_messages()
-        text = (messages[-1].get("content") or "").strip() if messages else ""
+        last = messages[-1] if messages else {}
+        if self._ending:
+            return
+        if last.get("role") != "user":
+            await self._handle_empty_turn()
+            return
+        text = self._start_strategy.without_own_voice((last.get("content") or "").strip())
         if not text:
+            await self._handle_empty_turn()
             return
         self._reply_unfinished = True
+        self._reading_turn = True
         self._line_started_at = None
         self._idle_prompts = 0
         await self._turns.put((text, None))
 
+    async def _handle_empty_turn(self):
+        if self._line_was_cut:
+            await self._speak_line(await asyncio.to_thread(record_line, self._session_id))
+
     async def _run_turns(self):
         while True:
             text, shown_as = await self._turns.get()
+            if self._ending:
+                continue
+            latest_words = text
             if self._merge_next_turn:
                 text = f"{self._unanswered_text} {text}".strip()
                 self._merge_next_turn = False
             generation = self._generation
             await self._show("patient", shown_as or text)
             reply = await self._reply_with_working_phrase(text, generation)
-            self._unanswered_text = "" if reply.advanced else text
+            self._reading_turn = not self._turns.empty()
+            self._unanswered_text = "" if reply.advanced else latest_words
             if generation != self._generation and not reply.ends_conversation:
                 await asyncio.to_thread(mark_reply_unheard, self._session_id)
                 continue
             await self._apply_step(reply)
             self._ending = reply.ends_conversation
-            await self._speak_line(reply.text)
+            if reply.text:
+                await self._speak_line(reply.text)
+            else:
+                self._reply_unfinished = False
 
     async def _reply_with_working_phrase(self, text, generation):
         reply_task = self.create_task(handle_turn(self._session_id, text))
@@ -266,6 +369,7 @@ class CallBridge(FrameProcessor):
     async def _speak_line(self, text):
         self._start_strategy.expect_line(text)
         self._reply_unfinished = True
+        self._line_was_cut = False
         await self._show("agent", text)
         await self.push_frame(TTSSpeakFrame(text, append_to_context=False))
 
@@ -276,19 +380,21 @@ class CallBridge(FrameProcessor):
         verified = reply.step not in (Step.IDENTIFY, Step.DONE)
         if verified and not self._keyterms_sent:
             self._keyterms_sent = True
-            keyterms = await asyncio.to_thread(refill_keyterms, self._session_id)
-            delta = AssemblyAISTTService.Settings(keyterms_prompt=keyterms)
-            await self.push_frame(STTUpdateSettingsFrame(delta=delta), FrameDirection.UPSTREAM)
+            await self._speech_input.use_keyterms(await asyncio.to_thread(refill_keyterms, self._session_id))
 
     async def _handle_interruption(self):
         self._generation += 1
         if not self._reply_unfinished:
             return
         self._reply_unfinished = False
+        self._line_was_cut = True
         started_at = self._line_started_at
         started_late = started_at is not None and time.monotonic() - started_at >= EARLY_CUT_OFF_SECONDS
         self._merge_next_turn = not started_late
-        await asyncio.to_thread(mark_reply_unheard, self._session_id)
+        if self._reading_turn:
+            return
+        question_heard = started_at is not None and self._start_strategy.question_was_heard()
+        await asyncio.to_thread(mark_reply_unheard, self._session_id, question_heard)
 
     async def _handle_line_finished(self):
         self._reply_unfinished = False
@@ -306,9 +412,9 @@ async def run_call(connection):
         webrtc_connection=connection,
         params=TransportParams(audio_in_enabled=True, audio_out_enabled=True),
     )
-    stt = AssemblyAISTTService(
+    stt = RefillSpeechInput(
         api_key=os.environ["ASSEMBLYAI_API_KEY"],
-        settings=AssemblyAISTTService.Settings(model=STT_MODEL),
+        settings=AssemblyAISTTService.Settings(model=STT_MODEL, language_codes=[Language.EN]),
     )
     tts = InworldTTSService(
         api_key=os.environ["INWORLD_API_KEY"],
@@ -324,7 +430,7 @@ async def run_call(connection):
             user_idle_timeout=IDLE_PROMPT_SECONDS,
         ),
     )
-    bridge = CallBridge(session_id, stop_strategy, start_strategy)
+    bridge = CallBridge(session_id, stt, stop_strategy, start_strategy)
     recorder = AudioBufferProcessor(num_channels=2)
     latency = UserBotLatencyObserver()
     task = PipelineTask(
@@ -337,6 +443,16 @@ async def run_call(connection):
     @latency.event_handler("on_latency_measured")
     async def on_latency_measured(_observer, latency_seconds):
         await asyncio.to_thread(record_first_audio, session_id, round(latency_seconds * 1000))
+
+    @stt.event_handler("on_usable_changed")
+    async def on_speech_input_changed(_stt, usable):
+        if not usable:
+            await bridge.handle_lost_hearing()
+
+    @tts.event_handler("on_usable_changed")
+    async def on_speech_output_changed(_tts, usable):
+        if not usable:
+            await end_call()
 
     @user_turns.event_handler("on_user_turn_idle")
     async def on_user_turn_idle(_aggregator):

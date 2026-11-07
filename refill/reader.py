@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import anthropic
 from dotenv import load_dotenv
 
-from refill.guard import FIXED_ANSWERS
+from refill.guard import FIXED_ANSWERS, QUESTION
 from refill.steps import Step, identity_locked, next_step
 
 load_dotenv()
@@ -22,6 +22,7 @@ PENDING_QUESTIONS = {
     Step.INSURANCE: "whether the insurance on file is still current",
     Step.CONFIRM: "whether to send the refill request",
 }
+CHOOSING_PHARMACY = "which pharmacy to use instead of the one on file"
 
 SYSTEM_PROMPT = """\
 You read messages from patients of Demo Pharmacy who are calling or texting about a prescription refill. \
@@ -46,41 +47,56 @@ Use the name and date from anywhere in the conversation.
 - If the caller says what they want before giving a name or date, use respond with kind "repeat".
 
 Other tools:
-- select_medication: match the patient's words, including a purpose such as "the blood pressure one", to an id in \
-the latest system note. Pass null if they name something not on the list. Do not pick the closest name.
+- select_medication: match the patient's words, including a purpose such as "the blood pressure one" or the brand \
+name of a drug on the list, to an id in the latest system note. Pass null if they name something not on the list. \
+Do not pick the closest name.
 - confirm_pharmacy: "yes" means the id of the pharmacy on file. Use another listed id, or other_pharmacy for one \
-not listed. If the patient says no without naming a pharmacy, pass null for both.
+not listed. If the patient says no, or asks about or for another pharmacy without naming one, pass null for both. \
+If they have no pharmacy yet, or only describe where one is, pass their words as other_pharmacy.
 - confirm_insurance: status is "current" if it is still right, "changed" if the patient says it changed, and \
 "unsure" for "I don't know" or "I'm not sure".
 - submit_request: only when the patient says yes to sending the request.
 - request_pharmacist: use clinical_question for dose advice, side effects, interactions or symptoms, \
-asked_for_person when they ask for a person or pharmacist, and urgent for emergency language such as chest pain, \
-trouble breathing, overdose or self-harm. Never use urgent if the patient says it is not an emergency.
+asked_for_person when they ask for a person or pharmacist, urgent for emergency language such as chest pain, \
+trouble breathing or overdose, and crisis for self-harm or not wanting to live. Never use urgent if the patient \
+says it is not an emergency. Also use clinical_question if they say the strength they take differs from the list.
 - change_answer: for "I want to change my medicine", "wrong one", or "go back", when the new value is not given. \
 Use the field named, previous for "go back", or all for "start over" or "main menu".
-- end_call: use patient_leaving for "I have to go" or "text me instead", and declined for "no" to sending the \
-request, "never mind", or "no" to a pharmacist calling back.
+- end_call: use patient_leaving only for "I have to go now" or "text me instead", when they still want the refill. \
+Use declined when they no longer want it: "no" to sending the request, "never mind", "forget it", "wrong number", \
+"I'll call back later", or "no" to a pharmacist calling back.
 
 respond, for everything else:
-- kind "repeat" when the patient asks you to say something again, or to hear a price or detail again.
-- kind "hold" only when the patient asks you to wait, such as "hold on" or "one second".
+- kind "repeat" when the patient asks you to say something again, asks what their medications are, or asks to \
+hear a price or detail again.
+- kind "hold" only when the patient asks you to wait, such as "hold on", "one second" or "let me think".
 - kind "repeat" also when the caller claims to have answered already but gives nothing new.
 - kind "unsure" when the patient says they don't know or aren't sure about the pending question.
-- kind "unclear" for background talk or anything you cannot understand.
+- kind "background" for speech clearly not meant for you: a TV or radio, news, or someone talking to another person.
+- kind "unclear" for anything else you cannot understand.
 - kind "answer" with text, only when the patient asked a question. Write one short plain statement, with no \
 questions, no prices and no lists. What a medication on the list is for, its strength and how often it is taken \
-are on record, so answer those from the latest system note.
+are on record, so answer those from the latest system note. Never answer from general knowledge: if the note does \
+not say it, use the fixed answer for anything else.
+- If the caller refuses to give their name or date of birth, use the fixed answer for why you need it.
 
 Fixed answers, to be used word for word:
 """ + "\n".join(f'- {situation}: "{answer}"' for situation, answer in FIXED_ANSWERS.items())
 
-FILLERS = re.compile(r"\b(um+|uh+|er+|ah+|hmm+)\b", re.IGNORECASE)
+FILLERS = re.compile(r"\b(um+|uh+|er+|ah+|hmm+|ahem|coughs?|coughing|sneezes?|sniffs?)\b", re.IGNORECASE)
 PUNCTUATION = str.maketrans("", "", string.punctuation.replace("'", ""))
 SOMEONE_ELSE = re.compile(
     r"\bmy (?:husband|wife|spouse|partner|son|daughter|mom|mother|dad|father|brother|sister|friend|neighbor)\b"
     r".*\b(prescription|medication|medicine|record|refill|pharmacy|insurance)",
     re.IGNORECASE,
 )
+ANOTHER_PHARMACY = re.compile(r"\b(other|another|different)\b.*\bpharmac", re.IGNORECASE)
+DONT_SEND = re.compile(
+    r"\b(don'?t|do not|not|never)\b.{0,15}\bsend\b|\bhold off\b|\bcancel\b|\bnvm\b|\bnever ?mind\b|\bforget it\b",
+    re.IGNORECASE,
+)
+PLAIN_YES = re.compile(r"\b(yes|yeah|yep|yup|sure|go ahead)\b", re.IGNORECASE)
+CORRECTION = re.compile(r"\b(no|not|wait|actually|instead|sorry|meant|wrong|rather|change)\b", re.IGNORECASE)
 SEVERAL_REFILLS = re.compile(r"\b(all (?:of them|three|3)|both|(?:first|last) (?:two|2))\b", re.IGNORECASE)
 GO_BACK = {"go back", "back", "go back please", "previous step", "go to the previous step", "go back one step"}
 MAIN_MENU = {"main menu", "start over", "start again", "go to the main menu"}
@@ -89,12 +105,26 @@ ASK_FOR_PHARMACIST = {
     "pharmacist", "pharmacist please", "a pharmacist", "talk to a pharmacist", "speak to a pharmacist", "operator",
     "representative", "a person", "a real person",
 }  # fmt: skip
-NOT_SURE = {"not sure", "i'm not sure", "i am not sure", "i don't know", "dont know", "no idea"}
+STILL_THERE = {
+    "are you there", "hello are you there", "hello hello are you there", "you there", "can you hear me",
+    "hello can you hear me", "is anyone there", "anyone there",
+}  # fmt: skip
+WAIT_A_MOMENT = {
+    "let me think", "let me see", "let me check", "hold on", "hang on", "one second", "one moment", "one sec",
+    "just a second", "just a moment", "give me a second", "give me a moment", "hold on a second", "wait a second",
+}  # fmt: skip
+STOP_TEXTING = {"stop", "unsubscribe", "stop texting", "stop texting me", "quit"}
+NOT_SURE = {"not sure", "i'm not sure", "i am not sure", "i don't know", "i dont know", "dont know", "idk", "no idea"}
 EXACT_YES = {
     "yes", "yeah", "yep", "yup", "yes please", "yeah please", "correct", "thats right", "that's right", "sure", "ok",
-    "okay", "yes it is", "go ahead", "send it", "yes send it", "okay send it", "please do", "sounds good",
+    "okay", "yes it is", "go ahead", "send it", "yes send it", "okay send it", "please do", "sounds good", "y", "ya",
+    "yea", "k", "kk", "👍", "✅", "yes that's right", "yes thats right", "yes that is right", "yes that's correct",
+    "yes thats correct", "yes that is correct", "that's correct", "thats correct", "that is correct", "yes correct",
+    "yes it's correct", "yes it is correct", "it's correct", "yes that's fine", "yes thats fine", "that's fine",
+    "thats fine", "yes ma'am", "yes maam", "yes sir", "yes yes", "yes please send it", "yes send it please",
+    "send it please", "yep send it", "yeah send it", "yes go ahead", "yes please go ahead", "yes please do",
 }  # fmt: skip
-EXACT_NO = {"no", "nope", "no thanks", "no thank you"}
+EXACT_NO = {"no", "nope", "no thanks", "no thank you", "n", "nah"}
 EXACT_CALLS = {
     (Step.PHARMACY, "yes"): lambda facts: (
         "confirm_pharmacy", {"pharmacy_id": facts.pharmacy_on_file["id"], "other_pharmacy": None}
@@ -140,7 +170,8 @@ def state_note(session, facts, just_verified=False):
     if identity_locked(session):
         return "Verification failed. Pending question: whether the caller wants a pharmacist to call back."
     step = next_step(session)
-    lines = [f"Pending question: {PENDING_QUESTIONS[step]}."]
+    choosing = step is Step.PHARMACY and session["wants_other_pharmacy"]
+    lines = [f"Pending question: {CHOOSING_PHARMACY if choosing else PENDING_QUESTIONS[step]}."]
     if not session["verified_at"]:
         lines.append("The caller is not verified, and you have no patient data.")
         return "\n".join(lines)
@@ -155,7 +186,7 @@ def state_note(session, facts, just_verified=False):
         f"- id {p['id']}: {p['name']}, {p['address']}{' (on file)' if p['id'] == on_file_id else ''}"
         for p in facts.pharmacies
     ]
-    lines.append(f"Insurance plan on file: {facts.insurance_plan}.")
+    lines.append(f"Insurance on file: {facts.insurance_plan}, member ID ending in {facts.member_id[-4:]}.")
     lines.append(f"Already recorded: {recorded_fields(session, facts) or 'nothing yet'}.")
     if just_verified:
         lines.append("The caller was just verified. Record the answers they gave anywhere in this conversation.")
@@ -195,8 +226,14 @@ def pharmacy_names(pharmacy):
 
 
 def navigation_call(session, words):
-    if words in REPEAT:
+    if not words or words in REPEAT:
         return ToolCall("respond", {"kind": "repeat", "text": None})
+    if words in WAIT_A_MOMENT:
+        return ToolCall("respond", {"kind": "hold", "text": None})
+    if words in STILL_THERE:
+        return ToolCall("respond", {"kind": "answer", "text": FIXED_ANSWERS["Whether you are still there, or can hear them"]})
+    if session["channel"] == "sms" and words in STOP_TEXTING:
+        return ToolCall("end_call", {"reason": "declined"})
     if words in ASK_FOR_PHARMACIST:
         return ToolCall("request_pharmacist", {"reason": "asked_for_person"})
     if words in GO_BACK or words in MAIN_MENU:
@@ -217,7 +254,7 @@ def exact_reading(session, facts, text):
     if SOMEONE_ELSE.search(text):
         refusal = FIXED_ANSWERS["Anyone else's records, or another patient"]
         return Reading(calls=(ToolCall("respond", {"kind": "answer", "text": refusal}),))
-    if SEVERAL_REFILLS.search(text) or names_several_prescriptions(facts, text):
+    if SEVERAL_REFILLS.search(text) or (names_several_prescriptions(facts, text) and not CORRECTION.search(text)):
         return Reading(calls=(ToolCall("respond", {"kind": "one_at_a_time", "text": None}),))
     step = next_step(session)
     if step is Step.INSURANCE and words in NOT_SURE:
@@ -228,9 +265,17 @@ def exact_reading(session, facts, text):
         pharmacy = next((p for p in facts.pharmacies if words in pharmacy_names(p)), None)
         if pharmacy:
             return Reading(calls=(ToolCall("confirm_pharmacy", {"pharmacy_id": pharmacy["id"], "other_pharmacy": None}),))
+        if session["wants_other_pharmacy"]:
+            return None
+        if QUESTION.search(text) and ANOTHER_PHARMACY.search(text):
+            return Reading(calls=(ToolCall("confirm_pharmacy", {"pharmacy_id": None, "other_pharmacy": None}),))
     if step is Step.MEDICATION:
         chosen = next((p for p in facts.prescriptions if p["medication"].lower() == words), None)
         return Reading(calls=(ToolCall("select_medication", {"prescription_id": chosen["id"]}),)) if chosen else None
+    if step is Step.CONFIRM and DONT_SEND.search(text) and not any(name in words for p in facts.pharmacies for name in pharmacy_names(p)):
+        if PLAIN_YES.search(text):
+            return Reading(calls=(ToolCall("respond", {"kind": "unclear", "text": None}),))
+        return Reading(calls=(ToolCall("end_call", {"reason": "declined"}),))
     answer = "yes" if words in EXACT_YES else "no" if words in EXACT_NO else None
     call = EXACT_CALLS.get((step, answer))
     if call is None:

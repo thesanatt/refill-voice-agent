@@ -212,6 +212,124 @@ Documented but not built: a patient calling back during an open SMS thread, seve
 - Chosen: B, agreed with Scope Health. Their numbers that can text US phones run production workflows, and a new registration is not worth it for a demo.
 - Why: the take-home is judged on how the fallback resumes from state, which is the same in both. Keeping `send_text` behind one function leaves real SMS as a small change later.
 - Revisit if: a registered number becomes available.
+- Update: calls stay simulated in the browser too, also agreed with Scope Health, so D19 no longer applies. Poor phone audio is simulated by `tests/phone_line.py` instead.
+
+## D21. A bare yes only answers a question the patient heard (2026-11-06)
+- Options: (A) leave it, since only the price is gated today; (B) ignore any reply that was interrupted; (C) treat a line as heard once the patient cuts in during its last 1.5 s, otherwise mark the question unheard, and refuse a yes or no to an unheard question unless the patient names the topic.
+- Chosen: C, and the same test now decides whether a cut-off price counts as stated.
+- Why: on a real call the patient said "Um, okay. Go ahead." with a short gap. "Um, okay" confirmed the pharmacy, and "Go ahead" then landed about a second into the insurance question and recorded it as confirmed, so the patient never heard it. They said so: "You never told me my Aetna number." B would throw away real early answers such as "Yes" over the end of a line, which people do all the time. The voice speaks 2.2 to 4.2 words a second, so the estimate of 2.5 errs towards unheard, and a wrong guess costs one repeated question.
+- Revisit if: word timings from the speech service make the estimate unnecessary.
+
+## D22. Wanting another pharmacy is a stored fact (2026-11-06)
+- Options: (A) keep it implied by the last agent line; (B) store it on the session.
+- Chosen: B, as `wants_other_pharmacy`. The pending question reads it, so it survives a re-ask and a dropped call, and a bare yes no longer means the pharmacy on file while the patient is choosing another one.
+- Why: "I would like to change my pharmacy" got "Sorry, I didn't catch that" twice on one real call, and once more on another, because nothing was recorded yet to clear. After any unclear turn the agent also fell back to asking about CVS again, right after the patient refused it.
+- Revisit if: more steps need a sub-question, when a small stored sub-step would be cleaner than one flag.
+
+## D23. A question the agent cannot answer still gets an answer (2026-11-06)
+- Options: (A) repeat the pending question; (B) say a fixed line, then repeat it.
+- Chosen: B. If the guard removes the model's whole answer, the patient hears "I can't help with that, but a pharmacist can." and then the pending question. "Is this call recorded?" and "When will it be ready?" also get fixed answers, because real callers asked the first one twice.
+- Why: "Is this call recorded?" and "Any discount?" were met with the same question again, as if the patient had said nothing. That is the most robotic thing the agent did on real calls.
+- Revisit if: the fixed line turns out to send too many callers to a pharmacist.
+
+## D24. When the agent can no longer hear or speak, the call falls back to text (2026-11-06)
+- Options: (A) leave the call open; (B) retry forever; (C) say so if it still can, end the call, and let the normal dropped-call path send the text.
+- Chosen: C. Pipecat already retries a broken speech connection three times, and then reports the service as unusable. That event now ends the call.
+- Why: during testing the speech service refused a session mid-call, and the agent went on speaking to a caller it could no longer hear, with no way out but hanging up. A dropped call is exactly what the SMS path is for, so nothing new is needed after the call ends. The same applies to a caller the agent simply cannot pick up, so a third idle timeout takes this path too, after 30 s of silence, or 90 s after "hold on".
+- Revisit if: a second speech provider is added, when failing over would beat ending the call.
+
+## D25. The agent ignores speech that is not meant for it (2026-11-06)
+- Options: (A) answer everything the speech service hears; (B) let the model mark speech as background, stay silent on it, and move the call to text if it keeps happening; (C) rely on noise suppression alone.
+- Chosen: B, with voice focus tested separately (D27). The model has a `background` reading for a TV, a radio or a person talking to someone else. On a call the agent says nothing unless that speech cut off its question, when it finishes the question. After six turns in a row it cannot use, it says it is having trouble hearing and moves to text. Keys and "say that again" do not count towards the six.
+- Why: with a news broadcast playing at 10 dB below the caller, the agent replied to the TV every few seconds for more than three minutes, and the simulated caller never got a word in. No data was wrong, but a real person would have hung up.
+- Revisit if: silence on a real caller's unclear speech turns out to feel like the line went dead. The idle prompt after 10 s is the safety net for that today.
+
+## D26. Speech recognition is pinned to English, and only a real transcript counts as a turn (2026-11-06)
+- Options for language: (A) leave automatic detection on; (B) pin English. Options for empty turns: (A) keep reading the last message in Pipecat's context; (B) accept only `user` messages, and handle a turn with no transcript in code.
+- Chosen: B for both. When a turn ends with no transcript and the agent's line was cut, the agent repeats the pending question, and otherwise it stays quiet. Turns that arrive after the call has ended are dropped.
+- Why: an Indian-accented caller on a noisy line came through in Hindi script, so a correct name and date never reached the model. Pipecat's recovery for an empty turn adds an instruction as a `developer` message. The bridge read the last message whatever its role, so that instruction was fed to the agent as the patient's words. A late turn also reopened a closed call and landed in the SMS thread.
+- Revisit if: the line needs to serve Spanish or other languages, when the language has to become a deliberate choice.
+
+## D27. Voice focus stays off (2026-11-06)
+- Options: (A) AssemblyAI's `near-field` voice focus, which removes background chatter; (B) leave it off.
+- Chosen: B. In an A/B of 12 simulated calls per arm, on the same callers and lines, near-field finished 6 calls against 8 without it, and needed 48 re-asks against 26. Neither arm recorded a wrong value.
+- Why: on these lines it removed parts of the caller's speech as well as the background. Twelve calls is a small sample, so this is no verdict on the feature, but nothing showed a benefit.
+- Revisit if: real phone audio replaces the simulation, since the feature is meant for handsets.
+
+## D28. A later request blocks a stale text from sending a second refill (2026-11-06)
+- Options: (A) block any repeat of a drug for a patient; (B) block a text thread only when that drug was sent after the text went out.
+- Chosen: B. The old thread closes with "already in".
+- Why: a call dropped at the last step, the patient called back and finished, then answered the old text with yes, and two requests were sent for one refill. A wider block would stop anyone from running the demo twice, and a real pharmacy's refill-too-soon rule belongs in its own system.
+- Revisit if: requests start carrying a fill date.
+
+## D29. The agent ignores its own voice (2026-11-06)
+- Options: (A) trust the phone or browser to cancel echo and let a bad line fall back to text; (B) cancel echo on the server against the audio it sent; (C) compare what is transcribed with the line being spoken.
+- Chosen: C. Echo starts where the line starts, so a finished transcript that is exactly the opening words of the line now playing is dropped, whoever said it, and it never interrupts. Two or more opening words, or five of the line's words in a row, prove echo for the rest of the call. Once proven, finished transcripts made mostly of the line are dropped too, and runs of two or more of its words are removed from any turn that started over the line or within 1.5 seconds of it ending. While the agent talks, a partial transcript made of its own line does not interrupt it.
+- Why: with 18 dB of echo and no cancelling, the agent cut itself off every couple of words and a silent caller had Lisinopril picked by the agent's own "I see Lisinopril". The first version needed five words in a row as proof, and that failed: the recognizer finished fragments like "Hi," so early that every line was cut before five words arrived. A plain word match would throw away real answers, since "Metformin" and "for blood pressure" repeat the list, so before proof those still go through as normal.
+- Cost: a real "Hi" over the greeting, or any word that opens the line being spoken, is ignored. On a proven echo call, an answer spoken over the agent that mostly quotes the line has to be repeated once the line ends. A one-word partial matching the line waits for the finished transcript before interrupting, on every call. B is much more code for a case phones and browsers mostly handle already.
+- Revisit if: real phone audio shows echo that the transcript cannot match.
+
+## D30. Keyterms go into the live speech session after verification (2026-11-07)
+- Options: (A) keep Pipecat's settings update, which reconnects; (B) send the pharmacy's terms when the session opens; (C) send the patient's terms over the open session with an `UpdateConfiguration` message.
+- Chosen: C, through a small subclass of Pipecat's service, since Pipecat only updates two other settings live. The terms are also stored, so a network reconnect keeps them.
+- Why: D12 assumed keyterms could change mid-stream, but Pipecat 1.15.0 reconnects for that setting. Every call used two speech sessions and dropped about half a second of audio as the patient was about to name a drug, and on the free tier's 5 new sessions a minute 28 of 120 test calls were refused. B fixed that and caused something worse: with drug names boosted during identity, "My full name" was heard as "Metformin", read as an early answer, and a refill for a drug nobody named went through. Keyterms belong only where those words are expected. AssemblyAI's API reference lists `keyterms_prompt` as updatable, and a live probe was accepted with no error or disconnect.
+- Cost: `_send_update_configuration` is a private Pipecat method, so an upgrade could break it.
+- Revisit if: Pipecat adds keyterms to its live settings.
+
+## D31. A question counts as heard when the question was spoken (2026-11-07)
+- Options: (A) keep timing the whole line; (B) time up to the last question mark; (C) let a repeated yes through after enough tries.
+- Chosen: B, and repair lines stop growing: "Let me finish the details first." is said once in a row, and "Sorry, I need this to keep going." becomes "One more time."
+- Why: the keypad hint comes after the question, so a cut during the hint marked a fully spoken question as unheard. In a cafe the background voices cut every re-ask, each one longer than the last, and a patient saying "Yes, that's fine" was refused for four minutes. C would weaken D21, which protects the send step, so the limit in D32 handles what is left.
+- Revisit if: word timings from speech output replace the words-per-second estimate.
+
+## D32. Six turns without progress of any kind move a call to text (2026-11-07)
+- Options: (A) keep D25, where only an unclear turn can trigger the move; (B) count every turn that changes nothing, including refused answers and repeated identity follow-ups.
+- Chosen: B, with a run-together name such as "Sarachin" now matched against the full name when the date is exact, so that this limit is reached less often.
+- Why: refused turns raised the count but could never fire it, so calls ran to the test's 241-second limit. A patient should reach a working channel in under a minute, not repeat themselves until they hang up.
+- Revisit if: patients who are slow but progressing get moved to text in real calls.
+
+## D33. In a noisy room, words that have stopped arriving end the turn (2026-11-07)
+- Options: (A) wait for the voice detector to hear silence, as Pipecat does; (B) raise the detector's threshold; (C) end the turn when no new words have arrived while the detector still reports speech; (D) C plus a cap on the total wait.
+- Chosen: C, starting from a finished transcript. The wait is at least 1.5 seconds and longer if the slot model says the answer is unfinished. It only runs while the detector is stuck on, so quiet calls take the same path as before.
+- Why: background voices kept the detector on, so a finished answer sat for 6 to 22 seconds. The caller repeated themselves and the conversation fell a turn out of step. B would also lose quiet callers. A cap would help a TV, which keeps producing words, but it would cut off anyone giving a long answer in a quiet room.
+- Result: on street calls most worst gaps fell from 6-7 seconds to 2-3 and calls got shorter. Cafe calls did not improve, with gaps still 16 to 24 seconds. Asking the recognizer for its final words with `ForceEndpoint` when partial words went stale made no difference over 12 calls, so that code was removed.
+- Cost: cafe voices and continuous TV speech still hold turns open, so those calls stay slow and often fall back to text.
+- Revisit if: noise is rare in real calls, or a speaker-aware detector replaces this.
+
+## D34. Ending a call needs words that support it (2026-11-07)
+- Options: (A) trust the model's `end_call`, as before; (B) gate it on the patient's words like every other tool that changes state.
+- Chosen: B. A refused `end_call` just asks the pending question again.
+- Why: in about 1 run in 15, the model read "and i go to the CVS by the church" as the patient leaving, and the call ended on the first sentence. It was the one action with no evidence check.
+- Cost: a goodbye in words the gate does not know gets a repeat of the question instead of a close.
+- Revisit if: real calls show patients stuck trying to leave.
+
+## D35. Noise during the model read no longer loses the answer being read (2026-11-07)
+- Options: (A) skip the unheard mark while a turn is being read, since the turn loop already marks a dropped reply once the read is done; (B) keep the mark and stop refusing when the same question played in full earlier; (C) ignore speech starts during reads.
+- Chosen: A.
+- Why: the 120-call matrix had 22 lines of "Let me finish the details first" in 17 calls. 16 were right: "Yes... correct" split in two and the tail landed on a question that had not played. The other 6 were a bug. A speech start during the read (room noise, in these calls) saw a reply that had not played and marked the question unheard, so the gate refused an answer to a question the patient had heard. One British cafe call lost "Yes, that's fine." four times until it ran out of time. A only moves the mark to after the read, so a new question that never played still counts as unheard and the price still has to be heard. B needs more state and could let a price through unheard. C would lose real talk-over.
+- Test: `room_noise_during_the_read_keeps_the_answer` plays short babble inside the read. It failed 2 of 4 runs before the fix and passed 6 of 6 after.
+- Revisit if: a reply dropped by noise needs its own repair line.
+
+## D36. A pharmacist flag for a clinical question needs more than agreement (2026-11-07)
+- Options: (A) leave it, since a needless callback is the safe side; (B) refuse `clinical_question` when every word in the message is plain agreement; (C) a clinical word list that the message must match.
+- Chosen: B.
+- Why: after "A pharmacist can help with that. Should I send it to CVS?", "Yes, that one is fine." was flagged in 4 of 12 runs, and the patient heard "I can't advise on that". I first called this a 1 in 200 slip, which was the rate over the whole typed set, not on this path. B cannot block a real report, because any word outside the small agreement list lets the flag through, so "yes I feel dizzy" still works. C would miss symptoms nobody listed. Urgent and crisis flags stay ungated.
+- Cost: a vague "is that okay?" gets the question again instead of a callback.
+- Revisit if: patients report something clinical using only those words.
+
+## D37. Common confirmations skip the model (2026-11-07)
+- Options: (A) keep the short list of exact yes phrases; (B) add common general confirmations; (C) add every phrase the test callers use.
+- Chosen: B.
+- Why: on a single clean call the median gap was 1.67 s against a target of about 1 s, and the model read took 786 ms of that. "Yes that's right", "yes that's fine" and "yes ma'am" have one meaning at a yes or no question, and the exact path still goes through every tool gate. C would only make the benchmark look better, so sentences like "Yes, that's still my insurance" stay with the model.
+- Cost: longer answers still pay for the read, so the target is not met on those turns.
+- Revisit if: a phrase on the list turns out to mean something else at one of those steps.
+
+## D38. A yes and a cancel in one answer asks again (2026-11-07)
+- Options: (A) when the answer at the send question has both a yes and a cancel word, ask the question again; (B) check every decline with a second question before ending; (C) keep ending the call on any cancel word.
+- Chosen: A.
+- Why: in the final matrix "Yes, you can send." came back as "Yes, you cancel". The cancel word ended the call with "No problem, I won't send it", so a patient who said yes lost the refill. The words disagree, so code should not pick one. B costs every real decline an extra turn, and A costs only the rare mixed answer.
+- Cost: "Yes, cancel it" now takes one more turn. A mixed answer misheard again and again ends in the text fallback, not a refill.
+- Revisit if: mixed answers show up often enough that a clearer prompt ("yes or no") is worth it.
 
 ## Open questions
 

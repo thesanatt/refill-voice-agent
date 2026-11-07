@@ -6,9 +6,10 @@ from difflib import SequenceMatcher
 from refill.db import load_session, transaction, update_session, utc_now
 from refill.guard import QUESTION, UNSURE
 from refill.render import load_facts, pharmacy_written
-from refill.steps import MAX_IDENTITY_FAILURES, Step, allowed_tools
+from refill.steps import MAX_IDENTITY_FAILURES, Step, allowed_tools, identity_locked
+from refill.turn_model import IDENTITY_STARTED
 
-NAME_MATCH_THRESHOLD = 0.85
+NAME_MATCH_THRESHOLD = 0.8
 MAX_PHARMACY_TEXT_LENGTH = 80
 PENDING_TOOLS = {
     Step.MEDICATION: "select_medication",
@@ -16,15 +17,30 @@ PENDING_TOOLS = {
     Step.INSURANCE: "confirm_insurance",
 }
 AFFIRMATIVE = re.compile(
-    r"\b(yes|yeah|yep|yup|ya|sure|ok|okay|please|correct|right|send|go ahead|do it|sounds good|fine|same|still"
-    r"|perfect|great|absolutely|definitely|works|mm-?hm+|uh-?huh)\b",
+    r"\b(yes|yeah|yea|yep|yup|ya|y|k|kk|sure|ok|okay|please|correct|right|send|go ahead|do it|sounds good|fine|same"
+    r"|still|perfect|great|absolutely|definitely|works|current|active|valid|hasn'?t changed|mm-?hm+|uh-?huh)\b|👍|✅",
     re.IGNORECASE,
 )
 NEGATIVE = re.compile(r"\b(no|nope|not|don't|dont|wait|stop|cancel|never ?mind|hold on|hang on)\b", re.IGNORECASE)
+LEAVING = re.compile(
+    r"\b(bye|goodbye|(have|got|gotta|need|must|going)( to)? (go|run|leave)|go now|text me|text instead|just text|leaving|later"
+    r"|driving|busy|wrong number|hold off|forget it|nvm|nah|n|unsubscribe|quit|hang up|can'?t talk)\b",
+    re.IGNORECASE,
+)
 CHANGE_REQUEST = re.compile(
     r"\b(change|different|another|other|wrong|go back|previous|switch|instead|start over|back up|main menu)\b",
     re.IGNORECASE,
 )
+ASKS_FOR_A_PERSON = re.compile(
+    r"pharmacist|person|human|some(?:one|body)|any(?:one|body)|representative|operator|agent|manager|nurse|doctor|staff",
+    re.IGNORECASE,
+)
+PLAIN_AGREEMENT = set(
+    "yes yeah yep yup sure ok okay correct right fine good great please that that's thats this one is it it's its "
+    "thanks thank you".split()
+)
+DOSE_SPOKEN = re.compile(r"(\d+)\s*(?:mg|milligrams?)\b", re.IGNORECASE)
+PHARMACY_FILLER_WORDS = set("the on at in by one store pharmacy my street st avenue ave please now".split())
 TOPIC_WORDS = {
     "confirm_pharmacy": re.compile(r"pharmac|drug ?store|cvs|walgreens|walmart|send it to", re.IGNORECASE),
     "confirm_insurance": re.compile(r"insurance|aetna|coverage|policy|\bplan\b", re.IGNORECASE),
@@ -51,7 +67,7 @@ def tool(name, description, properties):
     }
 
 
-RESPOND_KINDS = ["answer", "repeat", "hold", "unsure", "unclear"]
+RESPOND_KINDS = ["answer", "repeat", "hold", "unsure", "unclear", "background"]
 NULLABLE_TEXT = {"type": ["string", "null"]}
 NULLABLE_INTEGER = {"type": ["integer", "null"]}
 
@@ -90,7 +106,7 @@ TOOL_DEFINITIONS = [
     tool(
         "request_pharmacist",
         "Ask a pharmacist to call the patient back.",
-        {"reason": {"type": "string", "enum": ["clinical_question", "asked_for_person", "urgent"]}},
+        {"reason": {"type": "string", "enum": ["clinical_question", "asked_for_person", "urgent", "crisis"]}},
     ),
     tool(
         "end_call",
@@ -120,10 +136,15 @@ def expanded_year(year):
     return (1900 if year > this_century else 2000) + year
 
 
+def joined_name(name):
+    return normalized_name(name).replace(" ", "")
+
+
 def name_similarity(spoken, on_file):
     in_order = SequenceMatcher(None, normalized_name(spoken), normalized_name(on_file)).ratio()
     any_order = SequenceMatcher(None, sorted_name(spoken), sorted_name(on_file)).ratio()
-    return max(in_order, any_order)
+    run_together = SequenceMatcher(None, joined_name(spoken), joined_name(on_file)).ratio()
+    return max(in_order, any_order, run_together)
 
 
 def sorted_name(name):
@@ -143,16 +164,19 @@ def verify_identity(conn, session, arguments):
     date_given = None not in (year, month, day)
     if not arguments["full_name"]:
         return [Outcome("missing_name" if date_given else "missing_identity")]
-    if len(normalized_name(arguments["full_name"]).split()) < 2:
+    one_name = len(normalized_name(arguments["full_name"]).split()) < 2
+    if one_name and not date_given:
         return [Outcome("first_name_only")]
     if not date_given:
-        return [Outcome("missing_date")]
+        return [Outcome("missing_year" if month and day else "missing_month_day" if year else "missing_date")]
     try:
         date_of_birth = date(expanded_year(year), month, day)
     except ValueError:
         return [Outcome("invalid_date")]
 
     patient = match_patient(conn, arguments["full_name"], date_of_birth)
+    if patient is None and one_name:
+        return [Outcome("first_name_only")]
     if patient is None:
         failures = session["identity_failures"] + 1
         update_session(conn, session["id"], identity_failures=failures)
@@ -175,20 +199,35 @@ def select_medication(conn, session, arguments):
     return [Outcome("selected")]
 
 
+def listed_pharmacy_id(conn, text):
+    """A chain name alone, or with its listed street, means the listed store. "CVS on State Street" does not."""
+    words = set(normalized_name(text or "").split()) - PHARMACY_FILLER_WORDS
+    for pharmacy in conn.execute("SELECT * FROM pharmacies"):
+        chain = set(normalized_name(pharmacy["name"]).split()) - PHARMACY_FILLER_WORDS
+        street = set(normalized_name(pharmacy["address"]).split()) - PHARMACY_FILLER_WORDS
+        if words & chain and not words - chain - street:
+            return pharmacy["id"]
+    return None
+
+
 def confirm_pharmacy(conn, session, arguments):
-    pharmacy = conn.execute("SELECT id FROM pharmacies WHERE id = ?", (arguments["pharmacy_id"],)).fetchone()
+    pharmacy_id = arguments["pharmacy_id"] or listed_pharmacy_id(conn, arguments["other_pharmacy"])
+    pharmacy = conn.execute("SELECT id FROM pharmacies WHERE id = ?", (pharmacy_id,)).fetchone()
     if pharmacy is not None:
         if pharmacy["id"] == session["pharmacy_id"]:
             return [Outcome("unchanged")]
-        update_session(conn, session["id"], pharmacy_id=pharmacy["id"], pharmacy_text=None, price_stated_at=None)
+        chosen = {**CLEARED_FIELDS["pharmacy"], "pharmacy_id": pharmacy["id"]}
+        update_session(conn, session["id"], price_stated_at=None, **chosen)
         on_file = conn.execute("SELECT pharmacy_id FROM patients WHERE id = ?", (session["patient_id"],)).fetchone()
         return [Outcome("pharmacy_on_file" if pharmacy["id"] == on_file["pharmacy_id"] else "pharmacy_changed")]
     other_pharmacy = (arguments["other_pharmacy"] or "").strip()[:MAX_PHARMACY_TEXT_LENGTH]
     if not other_pharmacy:
+        update_session(conn, session["id"], wants_other_pharmacy=1)
         return [Outcome("pharmacy_declined")]
     if other_pharmacy == session["pharmacy_text"]:
         return [Outcome("unchanged")]
-    update_session(conn, session["id"], pharmacy_id=None, pharmacy_text=other_pharmacy, price_stated_at=None)
+    noted = {**CLEARED_FIELDS["pharmacy"], "pharmacy_text": other_pharmacy}
+    update_session(conn, session["id"], price_stated_at=None, **noted)
     return [Outcome("pharmacy_noted", other_pharmacy)]
 
 
@@ -200,7 +239,17 @@ def confirm_insurance(conn, session, arguments):
     return [Outcome(f"insurance_{status}")]
 
 
+def sent_since_the_text(conn, session):
+    return session["sms_sent_at"] and conn.execute(
+        "SELECT 1 FROM refill_requests WHERE patient_id = ? AND prescription_id = ? AND created_at > ?",
+        (session["patient_id"], session["prescription_id"], session["sms_sent_at"]),
+    ).fetchone()
+
+
 def submit_request(conn, session, _arguments):
+    if sent_since_the_text(conn, session):
+        update_session(conn, session["id"], status="declined")
+        return [Outcome("already_requested")]
     facts = load_facts(conn, session)
     needs_pharmacist = bool(
         session["needs_pharmacist"] or session["pharmacy_text"] or session["insurance_status"] != "current"
@@ -247,17 +296,24 @@ def end_call(conn, session, arguments):
 
 
 def change_answer(conn, session, arguments):
+    requested = arguments["field"]
+    if requested == "pharmacy":
+        cleared = {**CLEARED_FIELDS["pharmacy"], "wants_other_pharmacy": 1}
+        update_session(conn, session["id"], price_stated_at=None, **cleared)
+        return [Outcome("pharmacy_declined")]
+    if requested == "previous" and session["wants_other_pharmacy"]:
+        update_session(conn, session["id"], wants_other_pharmacy=0)
+        return [Outcome("answer_cleared")]
     answered = [field for field, value in ANSWERED_FIELDS.items() if value(session)]
     if not answered:
         return [Outcome("nothing_to_change")]
-    if arguments["field"] == "all":
-        everything = {name: None for fields in CLEARED_FIELDS.values() for name in fields}
+    if requested == "all":
+        everything = {name: value for fields in CLEARED_FIELDS.values() for name, value in fields.items()}
         update_session(conn, session["id"], price_stated_at=None, **everything)
         return [Outcome("started_over")]
-    field = answered[-1] if arguments["field"] == "previous" else arguments["field"]
-    if field not in answered:
-        return [Outcome("unchanged")]
-    update_session(conn, session["id"], price_stated_at=None, **CLEARED_FIELDS[field])
+    field = answered[-1] if requested == "previous" else requested
+    if field in answered:
+        update_session(conn, session["id"], price_stated_at=None, **CLEARED_FIELDS[field])
     return [Outcome("answer_cleared")]
 
 
@@ -272,7 +328,7 @@ ANSWERED_FIELDS = {
 }
 CLEARED_FIELDS = {
     "medication": {"prescription_id": None},
-    "pharmacy": {"pharmacy_id": None, "pharmacy_text": None},
+    "pharmacy": {"pharmacy_id": None, "pharmacy_text": None, "wants_other_pharmacy": 0},
     "insurance": {"insurance_status": None},
 }
 
@@ -303,6 +359,14 @@ def names_pharmacy(conn, pharmacy_id, patient_text):
     return street is not None and street in patient_text.lower()
 
 
+def states_different_dose(session_id, patient_text):
+    """True when the patient gives a strength that is not the one on file, which a pharmacist should check."""
+    with transaction() as conn:
+        session = load_session(conn, session_id)
+        chosen = conn.execute("SELECT dosage FROM prescriptions WHERE id = ?", (session["prescription_id"],)).fetchone()
+    return chosen is not None and bool(set(DOSE_SPOKEN.findall(patient_text)) - set(re.findall(r"\d+", chosen["dosage"])))
+
+
 def mentions_refill_details(session_id, patient_text):
     with transaction() as conn:
         patient_id = load_session(conn, session_id)["patient_id"]
@@ -319,6 +383,14 @@ def confirms_what_is_on_file(conn, session, name, arguments):
 
 
 def message_supports(conn, session, name, arguments, pending_step, patient_text):
+    if name == "verify_identity":
+        return not session["identity_failures"] or bool(IDENTITY_STARTED.search(patient_text))
+    if name == "request_pharmacist" and arguments["reason"] == "asked_for_person":
+        return identity_locked(session) or bool(ASKS_FOR_A_PERSON.search(patient_text))
+    if name == "request_pharmacist" and arguments["reason"] == "clinical_question":
+        return not set(re.findall(r"[a-z']+", patient_text.lower())) <= PLAIN_AGREEMENT
+    if name == "end_call":
+        return identity_locked(session) or bool(NEGATIVE.search(patient_text) or LEAVING.search(patient_text))
     if name == "submit_request":
         return bool(AFFIRMATIVE.search(patient_text)) and not NEGATIVE.search(patient_text)
     if name == "change_answer":
@@ -326,10 +398,12 @@ def message_supports(conn, session, name, arguments, pending_step, patient_text)
     if name not in ("select_medication", "confirm_pharmacy", "confirm_insurance"):
         return True
     is_pending = PENDING_TOOLS.get(pending_step) == name
+    if is_pending and session["question_unheard"] and name in TOPIC_WORDS and not TOPIC_WORDS[name].search(patient_text):
+        return False
     if name == "select_medication":
         return is_pending or names_prescription(conn, arguments["prescription_id"], patient_text)
     if name == "confirm_pharmacy" and arguments["pharmacy_id"] is None and not arguments["other_pharmacy"]:
-        return is_pending and bool(NEGATIVE.search(patient_text))
+        return is_pending and bool(NEGATIVE.search(patient_text) or CHANGE_REQUEST.search(patient_text))
     if name == "confirm_insurance" and QUESTION.search(patient_text):
         return False
     if name == "confirm_insurance" and arguments["status"] == "unsure":
@@ -338,6 +412,8 @@ def message_supports(conn, session, name, arguments, pending_step, patient_text)
         return bool(TOPIC_WORDS[name].search(patient_text))
     if not confirms_what_is_on_file(conn, session, name, arguments):
         return True
+    if name == "confirm_pharmacy" and session["wants_other_pharmacy"]:
+        return bool(TOPIC_WORDS[name].search(patient_text))
     says_yes = (
         AFFIRMATIVE.search(patient_text)
         or TOPIC_WORDS[name].search(patient_text)
@@ -346,9 +422,28 @@ def message_supports(conn, session, name, arguments, pending_step, patient_text)
     return bool(says_yes) and not QUESTION.search(patient_text)
 
 
+def declines_pharmacy(name, arguments):
+    if name == "change_answer":
+        return arguments["field"] == "pharmacy"
+    return name == "confirm_pharmacy" and not arguments["pharmacy_id"] and not arguments["other_pharmacy"]
+
+
+def pharmacy_named_instead(conn, session, patient_text):
+    """The one listed pharmacy the patient asked for by name, unless that name follows a "no" or "not"."""
+    text = patient_text.lower()
+    named = [p for p in conn.execute("SELECT * FROM pharmacies") if p["name"].split()[0].lower() in text]
+    if len(named) != 1 or named[0]["id"] == session["pharmacy_id"]:
+        return None
+    chain = named[0]["name"].split()[0].lower()
+    return None if re.search(rf"\b(no|not|don'?t|isn'?t)\b[^,.]*\b{chain}", text) else named[0]["id"]
+
+
 def run_tool(session_id, name, arguments, pending_step, patient_text):
     with transaction() as conn:
         session = load_session(conn, session_id)
+        named = pharmacy_named_instead(conn, session, patient_text) if declines_pharmacy(name, arguments) else None
+        if named:
+            name, arguments = "confirm_pharmacy", {"pharmacy_id": named, "other_pharmacy": None}
         if name not in allowed_tools(session):
             return [Outcome("refused")]
         if not message_supports(conn, session, name, arguments, pending_step, patient_text):

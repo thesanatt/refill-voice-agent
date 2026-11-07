@@ -11,7 +11,8 @@ from pathlib import Path
 os.environ["REFILL_DB_PATH"] = str(Path(tempfile.mkdtemp()) / "scenarios.db")
 
 from refill.core import handle_turn, open_session  # noqa: E402
-from refill.db import init_db, load_session, transaction  # noqa: E402
+from refill.db import DB_PATH, init_db, load_session, transaction  # noqa: E402
+from tests.invariants import audit  # noqa: E402
 
 SCENARIOS = json.loads((Path(__file__).parent / "scenarios.json").read_text(encoding="utf-8"))
 CALLER_PHONE = "(555) 867-5309"
@@ -24,7 +25,7 @@ def observed_state(session, request):
         "rx": session["prescription_id"],
         "pharm": session["pharmacy_id"],
         "ins": session["insurance_status"],
-        "flag": session["needs_pharmacist"],
+        "flag": int(bool(session["needs_pharmacist"] or (request and request["needs_pharmacist"]))),
         "reason": session["pharmacist_reason"],
         "verified": bool(session["verified_at"]),
         "request": request is not None,
@@ -68,8 +69,9 @@ def percentile(sorted_values, fraction):
 
 async def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--set", choices=("tuned", "holdout"), default="tuned", dest="scenario_set")
+    parser.add_argument("--set", choices=tuple(SCENARIOS), default="tuned", dest="scenario_set")
     parser.add_argument("--runs", type=int, default=3)
+    parser.add_argument("--dump", type=Path, help="write every conversation to this JSON file")
     parser.add_argument("names", nargs="*", help="only these scenarios")
     arguments = parser.parse_args()
 
@@ -94,6 +96,10 @@ async def main():
             print(f"    patient: {patient}\n    agent: {agent}")
     timings.sort()
     print(f"llm ms over {len(timings)} turns: p50 {percentile(timings, 0.5)} p95 {percentile(timings, 0.95)} max {timings[-1]}")
+    audit(DB_PATH)
+    if arguments.dump:
+        conversations = {name: {"problems": problems, "turns": turns} for name, problems, _, turns in results}
+        arguments.dump.write_text(json.dumps(conversations, indent=1))
 
 
 if __name__ == "__main__":
