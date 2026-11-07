@@ -124,6 +124,10 @@ MOVES = {
         (*TO_PHARMACY, Say(key="*"), Say("Metformin."), YES, Say(key="#"), Say("The first one."), YES, YES, YES, YES),
         want=COMPLETE,
     ),
+    "cancel_is_checked_on_the_keypad": Move(
+        (*TO_CONFIRM, Say("No, don't send it."), Say(key="2"), Say("No, don't send it."), Say(key="1")),
+        want={"status": "declined", "prescription_id": 1}, hear=("Press 1 to cancel it", "keep going", "won't send"),
+    ),
     "agent_voice_leaks_into_the_microphone": Move(
         (*TO_CONFIRM, YES, YES), want=COMPLETE, echo=True,
     ),

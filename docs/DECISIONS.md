@@ -331,6 +331,21 @@ Documented but not built: a patient calling back during an open SMS thread, seve
 - Cost: "Yes, cancel it" now takes one more turn. A mixed answer misheard again and again ends in the text fallback, not a refill.
 - Revisit if: mixed answers show up often enough that a clearer prompt ("yes or no") is worth it.
 
+## D39. Cancelling a refill on a call is checked once, with the keypad offered (2026-11-07)
+- Options: (A) end the call on the first answer that reads as a cancel; (B) ask once more by voice; (C) ask once more and offer keys: "Press 1 to cancel it, or 2 to keep going."
+- Chosen: C, the engineer's call.
+- Why: cancelling is the one answer that ends the call with nothing sent, and D38 showed a recognizer can turn a yes into a cancel. A key press cannot be misheard. Voice answers still work, because many callers will just say yes or no.
+- Scope: calls only, after verification. A typed text cannot be misheard, so SMS cancels at once. Before verification there is no refill to cancel. Sending already has its own check, the summary with the price.
+- Rules: 1, a plain yes or a cancel word cancels. 2, a plain no, "keep going" or "send it" keeps going, and at the summary a "send it" sends. Anything else gets the question again. Keys 1 and 2 do nothing at any other time. This replaces D38 on calls: a mixed yes and cancel now gets this check instead of the plain question.
+- Cost: a real cancel on a call takes one more turn.
+
+## D40. A shared test link on Railway with a TURN relay (2026-11-07)
+- Options: (A) a tunnel from my Mac; (B) Railway with a relay; (C) a cloud VM with open UDP ports.
+- Chosen: B, the engineer's call. Railway takes no inbound UDP, so call audio goes through Metered's TURN relay (free plan, 500 MB a month, no card). Cloudflare's relay asked for a card.
+- Why: reviewers need a link that works when my Mac is off. A relay also gets through office networks that block direct audio.
+- Shared-link rules: an access code in the link guards every endpoint, because the link spends real API credit. Each browser gets its own made-up caller number (555-01xx, a range kept for fiction), so testers never see each other's texts. At most three calls run at once. The page says calls are recorded and gives the demo patient's details.
+- Cost: audio takes an extra hop through the relay. When the 500 MB runs out, calls from strict networks fail until the next month.
+
 ## Open questions
 
 None at the moment. Earlier references use these numbers: Q1 is D8, Q2 is D10, Q3 is D1, Q4 is D2, Q5 is D12, Q6 is D13, Q7 is D3, Q8 is D11, Q9 is D14, Q10 is D4 and Q11 is D9.

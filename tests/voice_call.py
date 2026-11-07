@@ -1,6 +1,7 @@
 """Place a real WebRTC call to a running server, speaking a patient script with an ElevenLabs voice.
 
-Start the server first with `uv run python -m refill.server`. The gap reported for each turn runs from the
+Start the server first with `uv run python -m refill.server`, or pass `--server` and `--code` to call a shared
+link through its relay. The gap reported for each turn runs from the
 end of the patient's speech to the first agent audio received here, on one clock. It leaves out microphone
 and speaker hardware, and synthetic speech can make turn detection behave differently from a real voice.
 """
@@ -19,8 +20,9 @@ from pathlib import Path
 
 import aiohttp
 import numpy as np
-from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription
+from aiortc import MediaStreamTrack, RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCSessionDescription
 from aiortc.mediastreams import MediaStreamError
+from aiortc.rtcconfiguration import RTCIceTransportPolicy
 from av import AudioFrame
 from dotenv import load_dotenv
 
@@ -91,6 +93,16 @@ SCRIPTS = {
         Say("My name is Sarah, and my date of birth is March fifteenth, nineteen eighty-five."),
         Say("Sarah Chen."),
         Say("The first one."),
+    ],
+    "cancel_check": [
+        IDENTITY,
+        Say("Lisinopril."),
+        Say("Yes."),
+        Say("Yes."),
+        Say("No, don't send it."),
+        press("2"),
+        Say("No, don't send it."),
+        press("1"),
     ],
     "keypad": [
         IDENTITY,
@@ -222,11 +234,17 @@ def save_recording(ear, path):
         output.writeframes(b"".join(ear.recording))
 
 
-async def place_call(script, recording_path=None):
+async def place_call(script, recording_path=None, server=SERVER, code="", relay_only=False):
     transcript = []
     microphone = PatientMicrophone()
     ear = AgentEar()
-    peer = RTCPeerConnection()
+    headers = {"X-Access-Code": code}
+    async with aiohttp.ClientSession(headers=headers) as http:
+        async with http.get(f"{server}/api/ice") as response:
+            ice_servers = (await response.json())["iceServers"] if response.ok else []
+    policy = RTCIceTransportPolicy.RELAY if relay_only else RTCIceTransportPolicy.ALL
+    configuration = RTCConfiguration(iceServers=[RTCIceServer(**s) for s in ice_servers], iceTransportPolicy=policy)
+    peer = RTCPeerConnection(configuration)
     peer.addTrack(microphone)
     channel = peer.createDataChannel("chat", ordered=True)
 
@@ -245,7 +263,7 @@ async def place_call(script, recording_path=None):
     async with aiohttp.ClientSession() as http:
         clips = [await patient_audio(http, step.text) if step.text else None for step in script]
         offer = {"sdp": peer.localDescription.sdp, "type": peer.localDescription.type}
-        async with http.post(f"{SERVER}/api/offer", json=offer) as response:
+        async with http.post(f"{server}/api/offer", json=offer, headers=headers) as response:
             answer = await response.json()
     await peer.setRemoteDescription(RTCSessionDescription(sdp=answer["sdp"], type=answer["type"]))
 
@@ -279,11 +297,16 @@ async def main():
     parser.add_argument("--script", choices=SCRIPTS, default="happy")
     parser.add_argument("--calls", type=int, default=1)
     parser.add_argument("--record", type=Path, help="save the agent's audio from the last call to this WAV file")
+    parser.add_argument("--server", default=SERVER, help="base URL of the line, for example a shared link")
+    parser.add_argument("--code", default="", help="access code of a shared link")
+    parser.add_argument("--relay-only", action="store_true", help="send audio only through the relay, like a strict network")
     arguments = parser.parse_args()
     all_gaps = []
     for number in range(1, arguments.calls + 1):
         recording_path = arguments.record if number == arguments.calls else None
-        gaps, transcript = await place_call(SCRIPTS[arguments.script], recording_path)
+        gaps, transcript = await place_call(
+            SCRIPTS[arguments.script], recording_path, arguments.server, arguments.code, arguments.relay_only
+        )
         print(f"\ncall {number}")
         for role, text in transcript:
             print(f"  {role}: {text}")

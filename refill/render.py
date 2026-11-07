@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 from refill.guard import CANNOT_ANSWER, UNSURE, asked_something, safe_answer
-from refill.steps import Step, identity_locked, next_step
+from refill.steps import Step, checking_cancel, identity_locked, next_step
 
 AGENT_NAME = "Demo Pharmacy"
 ONES = (
@@ -19,6 +19,7 @@ IDENTITY_FOLLOW_UPS = {
     "missing_month_day": "And what month and day were you born?",
     "invalid_date": "That date didn't sound right. Can you say your date of birth again?",
 }
+CANCEL_CHECK_QUESTION = "Do you want to cancel this refill? Press 1 to cancel it, or 2 to keep going."
 NO_PROGRESS_OUTCOMES = {"unclear", "background", "refused", "unchanged", "repeat", "unsure", *IDENTITY_FOLLOW_UPS}
 
 
@@ -157,6 +158,8 @@ def greeting():
 def pending_question(session, facts, list_already_read=False):
     channel = session["channel"]
     step = next_step(session)
+    if checking_cancel(session):
+        return CANCEL_CHECK_QUESTION
     if step is Step.IDENTIFY:
         if identity_locked(session):
             return "I'm not able to verify that. Would you like a pharmacist to call you back?"
@@ -212,6 +215,10 @@ def lead_for(outcome, session, facts):
             return "I can't advise on that, but I've asked a pharmacist to call you back."
         case "asked_for_person":
             return "I've asked a pharmacist to call you back."
+        case "confirm_cancel":
+            return "Just to be sure."
+        case "keep_going":
+            return "Okay, let's keep going."
     return None
 
 

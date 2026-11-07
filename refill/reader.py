@@ -6,8 +6,8 @@ from dataclasses import dataclass
 import anthropic
 from dotenv import load_dotenv
 
-from refill.guard import FIXED_ANSWERS, QUESTION
-from refill.steps import Step, identity_locked, next_step
+from refill.guard import FIXED_ANSWERS, QUESTION, asks_to_send, cancel_check_answer
+from refill.steps import Step, checking_cancel, identity_locked, next_step
 
 load_dotenv()
 
@@ -23,6 +23,7 @@ PENDING_QUESTIONS = {
     Step.CONFIRM: "whether to send the refill request",
 }
 CHOOSING_PHARMACY = "which pharmacy to use instead of the one on file"
+CHECKING_CANCEL = "whether the caller wants to cancel this refill (a yes cancels it, a no keeps going)"
 
 SYSTEM_PROMPT = """\
 You read messages from patients of Demo Pharmacy who are calling or texting about a prescription refill. \
@@ -171,7 +172,9 @@ def state_note(session, facts, just_verified=False):
         return "Verification failed. Pending question: whether the caller wants a pharmacist to call back."
     step = next_step(session)
     choosing = step is Step.PHARMACY and session["wants_other_pharmacy"]
-    lines = [f"Pending question: {CHOOSING_PHARMACY if choosing else PENDING_QUESTIONS[step]}."]
+    pending = CHOOSING_PHARMACY if choosing else PENDING_QUESTIONS[step]
+    pending = CHECKING_CANCEL if checking_cancel(session) else pending
+    lines = [f"Pending question: {pending}."]
     if not session["verified_at"]:
         lines.append("The caller is not verified, and you have no patient data.")
         return "\n".join(lines)
@@ -243,6 +246,18 @@ def navigation_call(session, words):
     return None
 
 
+def cancel_check_reading(session, text):
+    """Code reads the answer to the cancel check. Anything it cannot place goes to the model, behind the same gates."""
+    answer = cancel_check_answer(text)
+    if answer == "cancel":
+        return Reading(calls=(ToolCall("end_call", {"reason": "declined"}),))
+    if answer == "keep" and next_step(session) is Step.CONFIRM and asks_to_send(text):
+        return Reading(calls=(ToolCall("submit_request", {}), ToolCall("keep_going", {})))
+    if answer == "keep":
+        return Reading(calls=(ToolCall("keep_going", {}),))
+    return None
+
+
 def exact_reading(session, facts, text):
     """Handle the few answers that need no interpretation, using the same tools the model would call."""
     words = " ".join(spoken_words(text))
@@ -251,6 +266,8 @@ def exact_reading(session, facts, text):
         return Reading(calls=(navigation,))
     if not session["verified_at"]:
         return None
+    if checking_cancel(session):
+        return cancel_check_reading(session, text)
     if SOMEONE_ELSE.search(text):
         refusal = FIXED_ANSWERS["Anyone else's records, or another patient"]
         return Reading(calls=(ToolCall("respond", {"kind": "answer", "text": refusal}),))
@@ -273,7 +290,7 @@ def exact_reading(session, facts, text):
         chosen = next((p for p in facts.prescriptions if p["medication"].lower() == words), None)
         return Reading(calls=(ToolCall("select_medication", {"prescription_id": chosen["id"]}),)) if chosen else None
     if step is Step.CONFIRM and DONT_SEND.search(text) and not any(name in words for p in facts.pharmacies for name in pharmacy_names(p)):
-        if PLAIN_YES.search(text):
+        if PLAIN_YES.search(text) and session["channel"] != "voice":
             return Reading(calls=(ToolCall("respond", {"kind": "unclear", "text": None}),))
         return Reading(calls=(ToolCall("end_call", {"reason": "declined"}),))
     answer = "yes" if words in EXACT_YES else "no" if words in EXACT_NO else None

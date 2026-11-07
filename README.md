@@ -4,6 +4,8 @@ A voice agent that takes prescription refill requests over a (simulated) phone c
 
 Status: the core flow works by voice and over the simulated SMS fallback, tuned on real calls.
 
+To try it without installing anything, use the shared test link (sent separately with its access code). [docs/TESTING_GUIDE.md](docs/TESTING_GUIDE.md) walks through every feature, and the same guide is linked from the call page.
+
 ## Setup
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/). It fetches the right Python version itself. Then copy the environment file and add your keys.
@@ -32,11 +34,25 @@ uv run python -m refill.server
 
 Open http://127.0.0.1:7860 in Chrome, allow the microphone and press Start call. The demo patient is Sarah Chen, born March 15, 1985.
 
-During a call, the page shows two keys, which also work from a computer keyboard: `*` goes back one answer and `#` returns to the main menu.
+During a call, the page shows four keys, which also work from a computer keyboard: `*` goes back one answer, `#` returns to the main menu, and `1` and `2` answer the check before a cancel ("Press 1 to cancel it, or 2 to keep going").
 
 If a call ends before the request is complete, a text appears in the pane beside the call and the conversation continues there from the step where it stopped.
 
 Each call is saved to `recordings/<session id>.wav`, which git ignores. The patient is on the left channel and the agent on the right.
+
+## Deploy a shared link
+
+The `Dockerfile` runs the same server on Railway (D40). Railway takes no inbound UDP, so call audio goes through a TURN relay, and the server and the page both read the relay list from `TURN_ICE_SERVERS`. Set these on the host, never in a committed file:
+
+| Variable | Value |
+|---|---|
+| `ANTHROPIC_API_KEY`, `ASSEMBLYAI_API_KEY`, `INWORLD_API_KEY` | as locally |
+| `TURN_ICE_SERVERS` | the relay's ICE server list as JSON, from the relay provider |
+| `DEMO_ACCESS_CODE` | any string. The link only works as `https://<host>/?code=<it>` |
+| `REFILL_DB_PATH`, `REFILL_RECORDINGS_DIR` | paths on a volume, for example `/data/refill.db` and `/data/recordings` |
+| `MAX_ACTIVE_CALLS` | calls at once, 3 by default |
+
+Then deploy with `railway up`. Leave `DEMO_ACCESS_CODE` and `TURN_ICE_SERVERS` unset locally, so local calls stay direct.
 
 ## Run the text loop
 
@@ -88,7 +104,7 @@ uv run python -m tests.voice_call --script happy --calls 5
 uv run python -m tests.voice_call --script price_cut_off
 ```
 
-The other scripts are `short_answers`, `barge_in`, `acknowledgement`, `declines_pharmacy`, `first_name_only` and `keypad`. Synthetic speech can make turn detection behave differently from a real voice, so treat these timings as a guide.
+The other scripts are `short_answers`, `barge_in`, `acknowledgement`, `declines_pharmacy`, `first_name_only`, `keypad` and `cancel_check`. To call a shared link instead, add `--server https://<host> --code <code>`, and `--relay-only` to send the audio through the relay only, the way a strict office network would. Synthetic speech can make turn detection behave differently from a real voice, so treat these timings as a guide.
 
 To refit the turn model from labelled real calls and compare policies on held-out calls:
 
@@ -108,5 +124,7 @@ uv run python -m tests.fit_turn_model
 | `refill/guard.py` | The check on free text from the model |
 | `refill/turn_model.py` | The Bayesian decision on how long to wait before replying |
 | `refill/voice.py` | The Pipecat pipeline, and the bridge between it and the core |
-| `refill/server.py`, `refill/web/index.html` | The local server and the call page |
+| `refill/server.py`, `refill/web/index.html` | The server and the call page |
+| `refill/web/guide.html`, `docs/TESTING_GUIDE.md` | The testing guide, also served at `/guide` |
+| `Dockerfile` | The image for the shared link |
 | `refill/schema.sql`, `refill/seed.sql` | Tables and demo data |

@@ -6,6 +6,7 @@ requires-python = ">=3.12,<3.14"
 dependencies = [
     "anthropic>=2.6.0",
     "fastapi>=0.162.0",
+    "markdown>=3.11",
     "pipecat-ai[assemblyai,inworld,silero,webrtc]==1.15.0",
     "python-dotenv>=1.2.4",
     "uvicorn[standard]>=0.54.0",

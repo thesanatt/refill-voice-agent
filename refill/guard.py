@@ -27,6 +27,15 @@ UNSURE = re.compile(
     r"(don'?t|do not|didn'?t) (know|remember|recall)|not sure|unsure|no idea|can'?t remember|\bidk\b|\bdunno\b",
     re.IGNORECASE,
 )
+NEGATED_SEND = re.compile(r"\b(don'?t|do not|not|never(?! ?mind))\b.{0,15}\bsend\b", re.IGNORECASE)
+NEGATED_CANCEL = re.compile(r"\b(don'?t|do not|not|never(?! ?mind))\b.{0,10}\bcancel", re.IGNORECASE)
+CANCEL_WORDS = re.compile(
+    r"\b(cancel|hold off|never ?mind|forget it|(don'?t|do not) (want|need) it|no longer need)\b", re.IGNORECASE
+)
+SEND_WORD = re.compile(r"\bsend\b", re.IGNORECASE)
+KEEP_WORDS = re.compile(r"\b(keep going|keep it|continue|carry on)\b", re.IGNORECASE)
+STARTS_YES = re.compile(r"^\W*(yes|yeah|yep|yup|correct|sure|i do)\b", re.IGNORECASE)
+STARTS_NO = re.compile(r"^\W*(no|nope|nah)\b", re.IGNORECASE)
 MONEY = re.compile(r"\$|\b(?:dollars?|cents?)\b", re.IGNORECASE)
 NUMBER = re.compile(r"\d+")
 TOOL_SYNTAX = re.compile(r"[{}<>\[\]`]|tool_use|function_call")
@@ -58,3 +67,23 @@ def checked_answer(text, known_facts, verified, patient_text):
     known_facts = known_facts.lower()
     sentences = SENTENCE_BOUNDARY.split(text.strip())
     return " ".join([s for s in sentences if sentence_is_safe(s, known_facts)][:MAX_SENTENCES])
+
+
+def asks_to_send(patient_text):
+    return bool(SEND_WORD.search(patient_text)) and not NEGATED_SEND.search(patient_text)
+
+
+def cancel_check_answer(patient_text):
+    """Read an answer to "Do you want to cancel this refill?" as "cancel", "keep" or None (D39)."""
+    cancel_word = CANCEL_WORDS.search(patient_text) and not NEGATED_CANCEL.search(patient_text)
+    cancels = bool(NEGATED_SEND.search(patient_text) or cancel_word)
+    keeps = bool(NEGATED_CANCEL.search(patient_text) or asks_to_send(patient_text) or KEEP_WORDS.search(patient_text))
+    if cancels != keeps:
+        return "cancel" if cancels else "keep"
+    if cancels:
+        return None
+    if STARTS_YES.search(patient_text):
+        return "cancel"
+    if STARTS_NO.search(patient_text):
+        return "keep"
+    return None

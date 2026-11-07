@@ -7,16 +7,17 @@ This file covers what I tested, what the tests found and what still fails. Numbe
 | Test | What it covers | Result |
 |---|---|---|
 | Exit checks | the flow end to end, by text | 0 failures |
-| Typed scenarios, 2 runs each | 397 scenarios in five sets | 794/794, 0 invariant violations |
+| Typed scenarios, 2 runs each | 403 scenarios in five sets | 805/806, 0 invariant violations. The miss is the known store-hours flake |
 | Hostile input | forged tool calls, racing messages, junk text | 0 failures, 0 violations |
 | SMS fallback | a call dropped at every step, finished by text | 15/15 |
-| Call moves | talk-over, noise, keypad, echo, drops and outages | 26/26 |
+| Call moves | talk-over, noise, keypad, the cancel check, echo, drops and outages | 27/27 |
 | Call matrix | 10 caller voices x 12 line conditions | 98 correct, 21 moved to text, 0 locked out, 0 wrong, 1 declined by a mishearing |
 | Invariants on every call database | rules that must hold however a call went | 146 sessions in 30 databases, 0 violations |
+| Shared link | 3 full calls from my Mac to the Railway link, 2 forced through the relay only | all finished as scripted, median reply 1.12 to 1.42 s |
 
 In the matrix, "correct" means the refill went in with the right drug, pharmacy and insurance. "Moved to text" is the designed fallback after six turns without progress or three unanswered prompts: the call ends and the SMS picks up at the same step. "Locked out" means identity failed twice and a pharmacist was offered. "Wrong" means a drug, pharmacy or insurance answer was written that the caller did not give. That is the number that has to stay at 0. Pharmacist callback flags are counted separately under known limits.
 
-The last fix, D38, came after the call runs. It changes one branch: an answer at the send question that has both a yes and a cancel word. No line in the typed sets or the call scripts reaches that branch except the new test for it, which I checked with the same patterns the code uses. So the call results and four typed sets ran on the code just before D38, and I reran the tuned set (148/148), the exit checks, hostile input and an SMS round on the code as submitted.
+D38 and D39 came after the call matrix. D39 adds a check before a cancel on a call: "Do you want to cancel this refill? Press 1 to cancel it, or 2 to keep going." No matrix caller cancels, so those calls never reach it, and the matrix numbers are from the code just before D38. Everything else ran again on the code as submitted: every typed set twice, the exit checks, hostile input, SMS fallback and all the moves. D39 changed the expected ending of 8 typed scenarios where a caller cancels on a call. Each now answers the check with "Yes." The one typed miss was `edge_asks_store_hours`, the flaky path under known limits. It passed 6 of 6 on a rerun, and it has now passed 17 of 20 runs.
 
 ## How the tests work
 
@@ -50,7 +51,7 @@ The per-condition gaps in the matrix come from 4 calls running at once over degr
 - **Calls ended on a misread.** The model sometimes read "and i go to the CVS by the church" as the patient leaving, about 1 run in 15. Ending a call now needs supporting words (D34).
 - **Noise during the model read** marked the question unheard and refused the answer being read. This hit 6 lines in 120 calls, and one cafe call ran out of time (D35).
 - **A false pharmacist flag** on "Yes, that one is fine." fired in 4 of 12 runs on that path. I first called it 1 in 200, which was the rate over the whole typed set, not on this path (D36).
-- **A yes taken as a decline.** In the final matrix "Yes, you can send." was transcribed "Yes, you cancel". The cancel word ended the call without sending the refill. An answer with both words now gets the question again (D38).
+- **A yes taken as a decline.** In the final matrix "Yes, you can send." was transcribed "Yes, you cancel". The cancel word ended the call without sending the refill. An answer with both words got the question again (D38). Then every cancel on a call got a check with the keypad offered (D39).
 
 ## Call matrix over time
 
@@ -124,6 +125,9 @@ Each of the 21 texts picked up at the step where the call stopped. A two-part an
 - A model read times out after 4 seconds with one retry. Under heavy parallel load this produced one "Sorry, I didn't catch that" in a typed run.
 - Keyterms go to AssemblyAI through `_send_update_configuration`, a private Pipecat method.
 - The echo test mixes the agent's voice back only while the caller is silent, so it does not cover double talk.
+- The shared link adds 0.25 to 0.56 s to the median reply (relay and hosting), measured on three calls against 0.86 s locally.
+- The relay's free plan carries 500 MB a month, a few hundred calls. Past that, calls that need the relay fail until the next month.
+- A cancel answered with "Yes, you can send" misheard as "Yes, you cancel" a second time would still cancel. The keys are offered so the caller doesn't have to rely on speech.
 
 ## Running the tests
 

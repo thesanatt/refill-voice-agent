@@ -42,6 +42,7 @@ from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import Speec
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from refill.core import (
+    cancel_check_pending,
     close_call,
     handle_turn,
     mark_reply_unheard,
@@ -63,7 +64,8 @@ RECORDINGS_DIR = Path(os.environ.get("REFILL_RECORDINGS_DIR", Path(__file__).par
 STT_MODEL = "universal-3-6-pro"
 TTS_MODEL = "inworld-tts-2"
 TTS_VOICE = "Ashley"
-KEYPAD_COMMANDS = {"*": "go back", "#": "main menu"}
+KEYPAD_COMMANDS = {"*": "go back", "#": "main menu", "1": "cancel it", "2": "keep going"}
+CANCEL_CHECK_KEYS = {"1", "2"}
 LOST_CONNECTION_SECONDS = 4.0
 WORKING_PHRASES = ("One moment.", "Let me check that.", "Just a second.")
 WORKING_PHRASE_AFTER_SECONDS = 1.5
@@ -289,6 +291,8 @@ class CallBridge(FrameProcessor):
         command = KEYPAD_COMMANDS.get(key)
         if command is None:
             return
+        if key in CANCEL_CHECK_KEYS and not await asyncio.to_thread(cancel_check_pending, self._session_id):
+            return
         await self.broadcast_interruption()
         await self._handle_interruption()
         self._merge_next_turn = False
@@ -406,8 +410,8 @@ class CallBridge(FrameProcessor):
         await self.push_frame(OutputTransportMessageUrgentFrame(message=message))
 
 
-async def run_call(connection):
-    session_id, greeting = await asyncio.to_thread(open_session, DEMO_CALLER_PHONE, "voice")
+async def run_call(connection, caller_phone=DEMO_CALLER_PHONE):
+    session_id, greeting = await asyncio.to_thread(open_session, caller_phone, "voice")
     transport = SmallWebRTCTransport(
         webrtc_connection=connection,
         params=TransportParams(audio_in_enabled=True, audio_out_enabled=True),

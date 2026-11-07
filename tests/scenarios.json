@@ -405,7 +405,8 @@
     "lisinopril",
     "yes",
     "yes",
-    "no don't send it"
+    "no don't send it",
+    "Yes."
    ],
    "channel": "voice",
    "want": {
@@ -413,7 +414,8 @@
     "request": false
    },
    "hear": [
-    "won't send it"
+    "won't send it",
+    "Press 1 to cancel it"
    ],
    "avoid": []
   },
@@ -1335,11 +1337,11 @@
   "mixed_yes_and_cancel_asks_again": {
    "lines": [
     "Sarah Chen, March 15 1985",
-    "metformin",
+    "lisinopril",
     "yes",
     "yes",
     "Yes, you cancel",
-    "yes"
+    "No, send it."
    ],
    "channel": "voice",
    "want": {
@@ -1347,8 +1349,7 @@
     "request": true
    },
    "hear": [
-    "Sorry",
-    "Should I send that in"
+    "Press 1 to cancel it"
    ],
    "avoid": [
     "won't send"
@@ -1360,7 +1361,8 @@
     "metformin",
     "yes",
     "yes",
-    "No, cancel it."
+    "No, cancel it.",
+    "Yes."
    ],
    "channel": "voice",
    "want": {
@@ -1368,7 +1370,129 @@
     "request": false
    },
    "hear": [
+    "won't send",
+    "Press 1 to cancel it"
+   ],
+   "avoid": []
+  },
+  "cancel_check_no_keeps_going": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "lisinopril",
+    "yes",
+    "yes",
+    "no don't send it",
+    "No.",
+    "yes"
+   ],
+   "channel": "voice",
+   "want": {
+    "status": "completed",
+    "request": true
+   },
+   "hear": [
+    "Press 1 to cancel it",
+    "keep going"
+   ],
+   "avoid": []
+  },
+  "cancel_check_key_two_then_yes": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "lisinopril",
+    "yes",
+    "yes",
+    "cancel it",
+    "keep going",
+    "yes"
+   ],
+   "channel": "voice",
+   "want": {
+    "status": "completed",
+    "request": true
+   },
+   "hear": [
+    "Press 1 to cancel it"
+   ],
+   "avoid": []
+  },
+  "cancel_check_key_one": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "lisinopril",
+    "yes",
+    "yes",
+    "hold off",
+    "cancel it"
+   ],
+   "channel": "voice",
+   "want": {
+    "status": "declined",
+    "request": false
+   },
+   "hear": [
+    "Press 1 to cancel it",
     "won't send"
+   ],
+   "avoid": []
+  },
+  "cancel_check_send_it_sends": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "lisinopril",
+    "yes",
+    "yes",
+    "no don't send it",
+    "No, send it."
+   ],
+   "channel": "voice",
+   "want": {
+    "status": "completed",
+    "request": true
+   },
+   "hear": [
+    "Press 1 to cancel it"
+   ],
+   "avoid": []
+  },
+  "cancel_check_mid_flow_keeps_answers": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "lisinopril",
+    "never mind, I don't need it anymore",
+    "no",
+    "yes",
+    "yes",
+    "yes"
+   ],
+   "channel": "voice",
+   "want": {
+    "status": "completed",
+    "request": true,
+    "rx": 1
+   },
+   "hear": [
+    "Press 1 to cancel it"
+   ],
+   "avoid": []
+  },
+  "cancel_check_repeat_then_yes": {
+   "lines": [
+    "Sarah Chen, March 15 1985",
+    "lisinopril",
+    "yes",
+    "yes",
+    "cancel",
+    "say that again",
+    "yes"
+   ],
+   "channel": "voice",
+   "want": {
+    "status": "declined",
+    "request": false
+   },
+   "hear": [
+    "Press 1 to cancel it"
    ],
    "avoid": []
   }
@@ -1776,14 +1900,17 @@
     "lisinopril",
     "yes",
     "yes",
-    "no thank you"
+    "no thank you",
+    "Yes."
    ],
    "channel": "voice",
    "want": {
     "request": false,
     "status": "declined"
    },
-   "hear": [],
+   "hear": [
+    "Press 1 to cancel it"
+   ],
    "avoid": []
   },
   "member_id_ask": {
@@ -2269,14 +2396,17 @@
     "metformin",
     "yes",
     "yes",
-    "actually no, hold off, don't send it"
+    "actually no, hold off, don't send it",
+    "Yes."
    ],
    "channel": "voice",
    "want": {
     "status": "declined",
     "request": false
    },
-   "hear": [],
+   "hear": [
+    "Press 1 to cancel it"
+   ],
    "avoid": [
     "didn't catch"
    ]
@@ -2385,13 +2515,16 @@
    "lines": [
     "Sarah Chen, March fifteenth, nineteen eighty five",
     "metformin",
-    "you know what, forget it, i'll just go to the store"
+    "you know what, forget it, i'll just go to the store",
+    "Yes."
    ],
    "channel": "voice",
    "want": {
     "status": "declined"
    },
-   "hear": [],
+   "hear": [
+    "Press 1 to cancel it"
+   ],
    "avoid": [
     "text you"
    ]
@@ -3816,7 +3949,8 @@
     "metformin",
     "yes",
     "yes",
-    "actually no, hold off, don't send it"
+    "actually no, hold off, don't send it",
+    "Yes."
    ],
    "channel": "voice",
    "want": {
@@ -3824,7 +3958,9 @@
     "request": false,
     "status": "declined"
    },
-   "hear": [],
+   "hear": [
+    "Press 1 to cancel it"
+   ],
    "avoid": []
   },
   "change_pharmacy_then_back": {
@@ -5090,7 +5226,8 @@
     "lisinopril",
     "yes",
     "yes",
-    "no thanks don't send it"
+    "no thanks don't send it",
+    "Yes."
    ],
    "channel": "voice",
    "want": {
@@ -5098,7 +5235,9 @@
     "request": false,
     "status": "declined"
    },
-   "hear": [],
+   "hear": [
+    "Press 1 to cancel it"
+   ],
    "avoid": []
   },
   "bye_hang_up_message": {
@@ -6474,7 +6613,8 @@
     "Lisinopril.",
     "Yes.",
     "Yes.",
-    "Actually no, hold off, I want to ask my doctor first."
+    "Actually no, hold off, I want to ask my doctor first.",
+    "Yes."
    ],
    "channel": "voice",
    "want": {
@@ -6485,7 +6625,9 @@
     "verified": true,
     "request": false
    },
-   "hear": [],
+   "hear": [
+    "Press 1 to cancel it"
+   ],
    "avoid": []
   },
   "mind_spells_name": {

@@ -16,7 +16,7 @@ from refill.render import (
     load_facts,
     pending_question,
 )
-from refill.steps import FINISHED_STATUSES, Step, allowed_tools, identity_locked, next_step
+from refill.steps import FINISHED_STATUSES, Step, allowed_tools, checking_cancel, identity_locked, next_step
 from refill.tools import definitions_for, mentions_refill_details, run_tool, states_different_dose
 
 LAST_EXCHANGE_MESSAGES = 3
@@ -157,7 +157,7 @@ def record_line(session_id, text=None):
         line = text or pending_question(session, load_facts(conn, session))
         if text is None:
             update_session(conn, session_id, question_unheard=0)
-        if text is None and next_step(session) is Step.CONFIRM:
+        if text is None and next_step(session) is Step.CONFIRM and not checking_cancel(session):
             update_session(conn, session_id, price_stated_at=utc_now())
         add_message(conn, session_id, session["channel"], "agent", line)
     return line
@@ -289,7 +289,7 @@ def finish_turn(session_id, turn, text, calls, outcomes, error_code, llm_ms, sta
             composed = compose_reply(session, facts, outcomes, turn.note, text, list_already_read(conn, session_id))
         if composed.asked_pending:
             update_session(conn, session_id, question_unheard=0)
-        if composed.asked_pending and next_step(session) is Step.CONFIRM:
+        if composed.asked_pending and next_step(session) is Step.CONFIRM and not checking_cancel(session):
             update_session(conn, session_id, price_stated_at=utc_now())
         reply_text = rephrased_if_repeated(conn, session_id, composed.text) if composed.text else ""
         if reply_text:
@@ -344,3 +344,8 @@ async def handle_turn(session_id, text):
         return await asyncio.to_thread(
             finish_turn, session_id, turn, text, calls, outcomes, reading.error_code, llm_ms, started
         )
+
+
+def cancel_check_pending(session_id):
+    with transaction() as conn:
+        return checking_cancel(load_session(conn, session_id))

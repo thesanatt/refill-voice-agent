@@ -31,6 +31,11 @@ def identity_locked(session):
     return session["identity_failures"] >= MAX_IDENTITY_FAILURES
 
 
+def checking_cancel(session):
+    """A cancel on a call waits for one more answer, with keys offered (D39)."""
+    return bool(session["cancel_pending"]) and session["channel"] == "voice"
+
+
 def allowed_tools(session):
     always = {"request_pharmacist", "end_call", "respond"}
     if identity_locked(session):
@@ -38,6 +43,7 @@ def allowed_tools(session):
     if not session["verified_at"]:
         return always | {"verify_identity"}
     field_tools = {"select_medication", "confirm_pharmacy", "confirm_insurance", "change_answer"}
+    tools = always | field_tools
     if next_step(session) is Step.CONFIRM and session["price_stated_at"]:
-        return always | field_tools | {"submit_request"}
-    return always | field_tools
+        tools |= {"submit_request"}
+    return (tools | {"keep_going"}) if checking_cancel(session) else tools

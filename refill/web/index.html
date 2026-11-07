@@ -18,6 +18,11 @@
   #keys { display: none; gap: 12px; margin: 20px 0 0; }
   #keys.on { display: flex; }
   #keys button { flex: 1; min-height: 64px; color: var(--ink); background: #fff; border: 2px solid var(--accent); }
+  #keys button.digit { flex: 0 0 64px; }
+  .demo { margin: 16px 0 0; padding: 12px 14px; border-left: 3px solid var(--accent); background: #fff; font: 15px/1.5 system-ui, sans-serif; }
+  .demo p { margin: 0 0 6px; }
+  .demo p:last-child { margin: 0; color: var(--muted); font-size: .85rem; }
+  a { color: var(--accent); }
   #log { margin: 24px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
   #log li { padding: 10px 0; border-bottom: 1px solid var(--line); }
   #log b { display: block; font: 600 .75rem system-ui, sans-serif; color: var(--muted); }
@@ -37,15 +42,21 @@
     <p id="status" class="status" role="status">Not connected</p>
     <button id="call" type="button">Start call</button>
     <div id="keys" role="group" aria-label="Phone keys">
+      <button type="button" class="digit" data-key="1">1</button>
+      <button type="button" class="digit" data-key="2">2</button>
       <button type="button" data-key="*">* Go back</button>
       <button type="button" data-key="#"># Main menu</button>
+    </div>
+    <div class="demo">
+      <p><b>Demo patient:</b> Sarah Chen, born March 15, 1985. She takes Lisinopril, Metformin and Atorvastatin.</p>
+      <p>Calls are recorded and transcribed so they can be reviewed. Use the demo patient, not your own details. <a id="guide" href="/guide">How to test this line</a></p>
     </div>
     <ol id="log"></ol>
     <audio id="agent" autoplay></audio>
   </section>
   <section id="phone" aria-label="Text messages">
     <h2>Texts</h2>
-    <p class="status">To (555) 867-5309</p>
+    <p class="status">To <span id="number"></span></p>
     <ol id="thread" aria-live="polite"></ol>
     <form id="reply">
       <input id="text" type="text" autocomplete="off" aria-label="Reply" placeholder="Reply" disabled>
@@ -65,11 +76,30 @@
   const sendButton = document.getElementById("send");
   const HEARTBEAT_MS = 1000;
   const TEXT_POLL_MS = 1000;
+  const ICE_GATHERING_LIMIT_MS = 4000;
+  const accessCode = new URLSearchParams(location.search).get("code") || "";
+  const callerPhone = demoNumber();
+  const headers = { "Content-Type": "application/json", "X-Access-Code": accessCode, "X-Caller-Phone": callerPhone };
+  document.getElementById("number").textContent = callerPhone;
+  document.getElementById("guide").href = `/guide?code=${encodeURIComponent(accessCode)}`;
   let connection = null;
   let microphone = null;
   let messages = null;
   let heartbeat = null;
   let lastTextId = 0;
+
+  function demoNumber() {
+    const made = () => `(${200 + Math.floor(Math.random() * 790)}) 555-01${String(Math.floor(Math.random() * 100)).padStart(2, "0")}`;
+    try {
+      const kept = localStorage.getItem("refill-caller-phone");
+      if (kept) return kept;
+      const number = made();
+      localStorage.setItem("refill-caller-phone", number);
+      return number;
+    } catch {
+      return made();
+    }
+  }
 
   function sendToServer(message) {
     if (messages?.readyState === "open") messages.send(JSON.stringify(message));
@@ -95,19 +125,29 @@
   function iceGatheringFinished(peer) {
     if (peer.iceGatheringState === "complete") return Promise.resolve();
     return new Promise((resolve) => {
+      setTimeout(resolve, ICE_GATHERING_LIMIT_MS);
       peer.addEventListener("icegatheringstatechange", () => {
         if (peer.iceGatheringState === "complete") resolve();
       });
     });
   }
 
+  async function failureText(response) {
+    if (response.status === 403) return "This link needs its access code. Use the full link you were sent.";
+    if (response.status === 503) return "All lines are busy. Try again in a minute.";
+    return `The line answered with an error (${response.status}).`;
+  }
+
   async function startCall() {
     setCallUi(true, "Connecting");
     log.replaceChildren();
+    const ice = await fetch("/api/ice", { headers });
+    if (!ice.ok) throw new Error(await failureText(ice));
+    const { iceServers } = await ice.json();
     microphone = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
-    const peer = new RTCPeerConnection();
+    const peer = new RTCPeerConnection({ iceServers });
     connection = peer;
     messages = peer.createDataChannel("chat", { ordered: true });
     messages.onmessage = (event) => addLine(JSON.parse(event.data));
@@ -122,23 +162,25 @@
     await iceGatheringFinished(peer);
     const response = await fetch("/api/offer", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({ sdp: peer.localDescription.sdp, type: peer.localDescription.type }),
     });
+    if (!response.ok) throw new Error(await failureText(response));
     await peer.setRemoteDescription(await response.json());
   }
 
   function endCall() {
+    microphone?.getTracks().forEach((track) => track.stop());
     if (!connection) return;
     clearInterval(heartbeat);
     connection.close();
     connection = null;
-    microphone?.getTracks().forEach((track) => track.stop());
     setCallUi(false, "Call ended");
   }
 
   async function pollTexts() {
-    const response = await fetch(`/api/sms?after=${lastTextId}`);
+    const response = await fetch(`/api/sms?after=${lastTextId}`, { headers });
+    if (!response.ok) return;
     for (const { id, role, text } of await response.json()) {
       const bubble = document.createElement("li");
       bubble.className = role;
@@ -153,24 +195,20 @@
 
   callButton.addEventListener("click", () => {
     if (connection) endCall();
-    else startCall().catch((error) => { endCall(); setCallUi(false, `Could not start: ${error.message}`); });
+    else startCall().catch((error) => { endCall(); setCallUi(false, `Could not start. ${error.message}`); });
   });
   keys.addEventListener("click", (event) => sendToServer({ type: "keypad", key: event.target.dataset.key }));
   window.addEventListener("pagehide", endCall);
   window.addEventListener("keydown", (event) => {
     const typing = event.target === replyText;
-    if (!typing && (event.key === "*" || event.key === "#")) sendToServer({ type: "keypad", key: event.key });
+    if (!typing && ["1", "2", "*", "#"].includes(event.key)) sendToServer({ type: "keypad", key: event.key });
   });
   replyForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const text = replyText.value.trim();
     if (!text) return;
     replyText.value = "";
-    await fetch("/api/sms", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
+    await fetch("/api/sms", { method: "POST", headers, body: JSON.stringify({ text }) });
     await pollTexts();
   });
   setInterval(() => pollTexts().catch(() => {}), TEXT_POLL_MS);

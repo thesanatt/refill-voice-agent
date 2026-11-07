@@ -4,9 +4,9 @@ from datetime import date
 from difflib import SequenceMatcher
 
 from refill.db import load_session, transaction, update_session, utc_now
-from refill.guard import QUESTION, UNSURE
+from refill.guard import QUESTION, UNSURE, asks_to_send, cancel_check_answer
 from refill.render import load_facts, pharmacy_written
-from refill.steps import MAX_IDENTITY_FAILURES, Step, allowed_tools, identity_locked
+from refill.steps import MAX_IDENTITY_FAILURES, Step, allowed_tools, checking_cancel, identity_locked
 from refill.turn_model import IDENTITY_STARTED
 
 NAME_MATCH_THRESHOLD = 0.8
@@ -291,8 +291,17 @@ def request_pharmacist(conn, session, arguments):
 
 def end_call(conn, session, arguments):
     locked = session["identity_failures"] >= MAX_IDENTITY_FAILURES
-    update_session(conn, session["id"], status="declined" if locked or arguments["reason"] == "declined" else "dropped")
+    declined = locked or arguments["reason"] == "declined"
+    first_cancel_on_a_call = session["verified_at"] and session["channel"] == "voice" and not session["cancel_pending"]
+    if declined and not locked and first_cancel_on_a_call:
+        update_session(conn, session["id"], cancel_pending=1)
+        return [Outcome("confirm_cancel")]
+    update_session(conn, session["id"], status="declined" if declined else "dropped")
     return [Outcome(arguments["reason"])]
+
+
+def keep_going(_conn, _session, _arguments):
+    return [Outcome("keep_going")]
 
 
 def change_answer(conn, session, arguments):
@@ -342,7 +351,11 @@ HANDLERS = {
     "request_pharmacist": request_pharmacist,
     "end_call": end_call,
     "respond": respond,
+    "keep_going": keep_going,
 }
+LEAVES_THE_CANCEL_CHECK = {
+    "select_medication", "confirm_pharmacy", "confirm_insurance", "change_answer", "submit_request", "keep_going",
+}  # fmt: skip
 
 
 def names_prescription(conn, prescription_id, patient_text):
@@ -389,8 +402,12 @@ def message_supports(conn, session, name, arguments, pending_step, patient_text)
         return identity_locked(session) or bool(ASKS_FOR_A_PERSON.search(patient_text))
     if name == "request_pharmacist" and arguments["reason"] == "clinical_question":
         return not set(re.findall(r"[a-z']+", patient_text.lower())) <= PLAIN_AGREEMENT
+    if name == "end_call" and arguments["reason"] == "declined" and checking_cancel(session):
+        return cancel_check_answer(patient_text) == "cancel"
     if name == "end_call":
         return identity_locked(session) or bool(NEGATIVE.search(patient_text) or LEAVING.search(patient_text))
+    if name == "submit_request" and checking_cancel(session):
+        return cancel_check_answer(patient_text) == "keep" and asks_to_send(patient_text)
     if name == "submit_request":
         return bool(AFFIRMATIVE.search(patient_text)) and not NEGATIVE.search(patient_text)
     if name == "change_answer":
@@ -448,4 +465,7 @@ def run_tool(session_id, name, arguments, pending_step, patient_text):
             return [Outcome("refused")]
         if not message_supports(conn, session, name, arguments, pending_step, patient_text):
             return [Outcome("refused")]
+        if session["cancel_pending"] and name in LEAVES_THE_CANCEL_CHECK:
+            update_session(conn, session["id"], cancel_pending=0)
+            session = load_session(conn, session["id"])
         return HANDLERS[name](conn, session, arguments)
