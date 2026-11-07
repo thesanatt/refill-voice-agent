@@ -67,7 +67,9 @@ def main():
         tool_only = all(b.get("type") == "tool_result" for b in blocks)
         speaker = "Tool" if tool_only else ("User" if rec["type"] == "user" else "Claude")
         entries.append(f"### {speaker} ({rec.get('timestamp', '')})\n\n{redact(body, secrets)}\n")
-    name = f"{(started or 'session')[:10]}_session_{event['session_id'][:8]}.md"
+    if not entries:
+        return
+    name = f"{started[:10]}_session_{event['session_id'][:8]}.md"
     header = (f"# Claude Code session {event['session_id']}\n\n"
               f"Exported after every turn by .claude/hooks/export_transcript.py. Tool input and output are cut at {MAX_CHARS} characters, and likely API keys are redacted.\n\n")
     (out_dir / name).write_text(header + "\n".join(entries), encoding="utf-8")

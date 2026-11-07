@@ -1,10 +1,26 @@
 # Prescription Refill Voice Agent
 
-A voice agent that takes prescription refill requests over a (simulated) phone call and continues over (simulated) SMS if the call drops. The problem statement is in [docs/TAKE_HOME.md](docs/TAKE_HOME.md), kickoff clarifications in [docs/KICKOFF_NOTES.md](docs/KICKOFF_NOTES.md), and design decisions in [docs/DECISIONS.md](docs/DECISIONS.md).
+A voice agent for a pharmacy phone line. A patient calls, verifies their identity and requests a refill: they pick a medication, confirm the pharmacy and insurance, hear their copay and say yes. If the call drops first, the conversation continues by text from the step where it stopped. The phone call and the texts are both simulated in the browser.
 
-Status: the core flow works by voice and over the simulated SMS fallback, tuned on real calls.
+**Try it:** [refill-line-production.up.railway.app](https://refill-line-production.up.railway.app/?code=6f828e8858) in Chrome or Edge, with the microphone allowed. The demo patient is Sarah Chen, born March 15, 1985. [docs/TESTING_GUIDE.md](docs/TESTING_GUIDE.md) walks through every feature, and the call page links to it.
 
-To try it without installing anything, use the shared test link (sent separately with its access code). [docs/TESTING_GUIDE.md](docs/TESTING_GUIDE.md) walks through every feature, and the same guide is linked from the call page.
+## How it works
+
+- AssemblyAI Universal-3 Pro streaming turns speech into text, Claude Haiku 5.5 reads each message into tool calls, and Inworld speaks the reply. Pipecat runs the pipeline over WebRTC.
+- Every answer is written to SQLite as it happens, and the current step is derived from the stored fields. Nothing collected lives only in the model's context.
+- A tool layer checks each call against the state and against the patient's own words before anything is written. Sentences that carry a drug, pharmacy, plan or price are built by code from tool results, never generated.
+- One turn function serves both channels, so the text fallback resumes exactly where the call stopped and never asks again for an answer it has.
+
+## Documents
+
+| File | What it holds |
+|---|---|
+| [docs/TAKE_HOME.md](docs/TAKE_HOME.md) | The problem statement, verbatim |
+| [docs/KICKOFF_NOTES.md](docs/KICKOFF_NOTES.md) | Clarifications from the kickoff call |
+| [docs/DECISIONS.md](docs/DECISIONS.md) | Every design decision, D1 to D40, with the options and the reason |
+| [docs/QA.md](docs/QA.md) | What I tested, the results and the known limits |
+| [docs/TESTING_GUIDE.md](docs/TESTING_GUIDE.md) | How to try every feature on the shared link |
+| [agent-logs/](agent-logs/) | The coding-agent sessions, with API keys redacted |
 
 ## Setup
 

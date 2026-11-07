@@ -6,6 +6,7 @@ This guide shows you how to try every part of it. It also covers what I measured
 
 ## Before you start
 
+- Open the line at [refill-line-production.up.railway.app](https://refill-line-production.up.railway.app/?code=6f828e8858). The link only works with its `?code=` part.
 - Use Chrome or Edge on a laptop and allow the microphone. Headphones help, but the agent also ignores its own voice on a speaker.
 - The **Start call** button is on the left and the texts are on the right. Your browser gets its own made-up number, so other testers never see your texts.
 - Calls are recorded and transcribed so I can review them. Please use the demo patient below and none of your own details.

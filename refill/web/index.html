@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Refill Line</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%230f6b57%27/%3E%3Crect x=%2713%27 y=%276%27 width=%276%27 height=%2720%27 rx=%271.5%27 fill=%27%23fff%27/%3E%3Crect x=%276%27 y=%2713%27 width=%2720%27 height=%276%27 rx=%271.5%27 fill=%27%23fff%27/%3E%3C/svg%3E">
 <style>
   :root { --ink: #1c1a17; --muted: #6b655c; --paper: #fbfaf7; --line: #ddd8cf; --accent: #0f6b57; --stop: #a3341f; --bubble: #e9e5dc; }
   * { box-sizing: border-box; }
@@ -11,6 +12,7 @@
   main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 32px; max-width: 1000px; margin: 0 auto; padding: 32px 16px; }
   h1, h2 { font-size: 1.4rem; margin: 0 0 4px; }
   .status { color: var(--muted); margin: 0 0 20px; font-family: system-ui, sans-serif; font-size: .9rem; }
+  .lede { margin: 0 0 6px; color: var(--muted); }
   button { font: 600 1rem system-ui, sans-serif; padding: 10px 18px; border: 0; border-radius: 4px; color: #fff; background: var(--accent); cursor: pointer; }
   button.stop { background: var(--stop); }
   button:focus-visible, input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
@@ -39,6 +41,7 @@
 <main>
   <section aria-label="Phone call">
     <h1>Refill line</h1>
+    <p class="lede">Demo Pharmacy's AI phone line for prescription refills. If the call drops, it texts you here.</p>
     <p id="status" class="status" role="status">Not connected</p>
     <button id="call" type="button">Start call</button>
     <div id="keys" role="group" aria-label="Phone keys">
